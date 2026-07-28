@@ -230,7 +230,8 @@ function renderHome() {
       <td>${esc(ing.name)}</td>
       <td class="num">${s ? `${fmtQty(s.usable)} ${u.big}` : "–"}</td>
       <td class="num">${s ? `${money(s.perBig)}/${u.big}` : `<span class="muted">${esc(t("no_price_yet"))}</span>`}</td>
-      <td class="action">${isAdmin() ? `<button class="rowlink" data-edit-ing="${ing.id}">${esc(t("edit"))}</button>` : ""}</td>
+      <td class="action">${isAdmin() ? `<button class="rowlink" data-edit-ing="${ing.id}">${esc(t("edit"))}</button>
+        <button class="rowlink x" data-del-ing="${ing.id}" aria-label="${esc(t("delete_ingredient"))}">✕</button>` : ""}</td>
     </tr>`;
   }).join("");
 
@@ -295,6 +296,18 @@ function renderHome() {
   if (addDish) addDish.onclick = () => go({ name: "dish", id: null });
   $app.querySelectorAll("[data-edit-ing]").forEach((b) => {
     b.onclick = () => go({ name: "ingredient", id: b.dataset.editIng });
+  });
+  $app.querySelectorAll("[data-del-ing]").forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm(t("confirm_delete"))) return;
+      const { error } = await db.from("ingredients").delete().eq("id", b.dataset.delIng);
+      if (error) {
+        // 23503 = foreign key violation: the ingredient is used by a dish.
+        alert(error.code === "23503" ? t("ing_in_use") : t("save_failed"));
+        return;
+      }
+      render();
+    };
   });
   $app.querySelectorAll("[data-edit-dish]").forEach((b) => {
     b.onclick = () => go({ name: "dish", id: b.dataset.editDish });
