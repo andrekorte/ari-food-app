@@ -1,0 +1,11 @@
+{
+  "name": "Food tracker — Ari Thai Street Food",
+  "short_name": "Food tracker",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#faf5f2",
+  "theme_color": "#ffcf0e",
+  "icons": [
+    { "src": "assets/ari-logo.png", "sizes": "338x338", "type": "image/png" }
+  ]
+}

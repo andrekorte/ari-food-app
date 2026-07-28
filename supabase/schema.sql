@@ -7,6 +7,8 @@ create table public.ingredients (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   unit text not null default 'kg' check (unit in ('kg', 'l')),
+  category text not null default 'other'
+    check (category in ('meat', 'veg', 'sauce', 'other')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   updated_by text
@@ -36,18 +38,40 @@ create table public.dishes (
   updated_by text
 );
 
--- "restrict" stops an ingredient being deleted while a dish still uses it;
+-- A sauce is a recipe of ingredients (grams each); its cost per gram is
+-- derived from those and used when a dish contains the sauce.
+create table public.sauces (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  updated_by text
+);
+
+create table public.sauce_ingredients (
+  id uuid primary key default gen_random_uuid(),
+  sauce_id uuid not null references public.sauces (id) on delete cascade,
+  ingredient_id uuid not null references public.ingredients (id) on delete restrict,
+  grams numeric not null check (grams > 0)
+);
+
+-- Each dish row references EITHER an ingredient OR a sauce.
+-- "restrict" stops an ingredient/sauce being deleted while still in use;
 -- the app shows a friendly message when that happens.
 create table public.dish_ingredients (
   id uuid primary key default gen_random_uuid(),
   dish_id uuid not null references public.dishes (id) on delete cascade,
-  ingredient_id uuid not null references public.ingredients (id) on delete restrict,
-  grams numeric not null check (grams > 0)
+  ingredient_id uuid references public.ingredients (id) on delete restrict,
+  sauce_id uuid references public.sauces (id) on delete restrict,
+  grams numeric not null check (grams > 0),
+  check ((ingredient_id is null) <> (sauce_id is null))
 );
 
 create index purchases_ingredient_idx on public.purchases (ingredient_id, purchased_at desc);
 create index dish_ingredients_dish_idx on public.dish_ingredients (dish_id);
 create index dish_ingredients_ingredient_idx on public.dish_ingredients (ingredient_id);
+create index dish_ingredients_sauce_idx on public.dish_ingredients (sauce_id);
+create index sauce_ingredients_sauce_idx on public.sauce_ingredients (sauce_id);
 
 -- User roles: 'admin' (full access) and 'shopper' (may only record
 -- purchases and read the ingredient list). A user without a profiles row
@@ -75,6 +99,8 @@ alter table public.ingredients enable row level security;
 alter table public.purchases enable row level security;
 alter table public.dishes enable row level security;
 alter table public.dish_ingredients enable row level security;
+alter table public.sauces enable row level security;
+alter table public.sauce_ingredients enable row level security;
 alter table public.profiles enable row level security;
 
 create policy "team read" on public.profiles
@@ -86,6 +112,10 @@ create policy "team read" on public.purchases
 create policy "team read" on public.dishes
   for select to authenticated using (true);
 create policy "team read" on public.dish_ingredients
+  for select to authenticated using (true);
+create policy "team read" on public.sauces
+  for select to authenticated using (true);
+create policy "team read" on public.sauce_ingredients
   for select to authenticated using (true);
 
 -- Every logged-in user, including shoppers, can record purchases.
@@ -100,4 +130,8 @@ create policy "admin delete purchases" on public.purchases
 create policy "admin write" on public.dishes
   for all to authenticated using (public.is_admin()) with check (public.is_admin());
 create policy "admin write" on public.dish_ingredients
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+create policy "admin write" on public.sauces
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+create policy "admin write" on public.sauce_ingredients
   for all to authenticated using (public.is_admin()) with check (public.is_admin());

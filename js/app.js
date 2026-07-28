@@ -1,27 +1,33 @@
 /* Food tracker — kitchen costing app for Ari Thai Street Food.
- * Views: login → home (ingredient + dish overviews) → basket purchase,
- * add/edit ingredient, add/edit dish. All data lives in a shared Supabase
- * database; every logged-in team member reads and writes the same rows.
+ * iOS-app-style UI: fixed glass header, bottom tab bar (Home / Purchases),
+ * full-screen searchable item pickers, collapsible ingredient categories.
  *
- * Units: each ingredient is measured in kg (weight) or L (volume, e.g.
- * oil). Purchases/wastage are entered in that unit; dish amounts are the
- * matching small unit (g or mL). The purchases table's purchased_kg /
- * wastage_kg columns hold whichever unit the ingredient uses.
+ * Data model: ingredients (kg or L, categorised meat/veg/sauce/other) with
+ * purchase history; sauces = recipes of sauce ingredients, costed per gram;
+ * dishes contain ingredients and/or sauces. Shared Supabase database with
+ * roles: admin (full) and shopper (record purchases only).
+ *
+ * The purchases table's purchased_kg / wastage_kg columns hold whichever
+ * unit the ingredient uses. The user enters "weight when bought" and
+ * "weight after preparation"; wastage = bought − after.
  */
 
 let db = null;
 let session = null;
 const state = {
-  ingredients: [], // each with .purchases[]
-  dishes: [],      // each with .dish_ingredients[]
-  profile: null,   // this user's row in profiles (null = full access)
+  ingredients: [],
+  dishes: [],
+  sauces: [],
+  saucesMissing: false, // categories/sauces migration not run yet
+  profile: null,        // this user's row in profiles (null = full access)
   view: { name: "home" },
 };
-let draft = null; // working copy for the currently open editor
+let draft = null;
 
 const $app = document.getElementById("app");
 const LOGO = `<img src="assets/ari-logo.png" alt="" class="brand-logo">`;
 const APP_NAME = "Food tracker";
+const CATS = ["meat", "veg", "sauce", "other"];
 
 /* ---------- helpers ---------- */
 
@@ -41,13 +47,17 @@ function fmtQty(n) {
   return String(Number(Number(n).toFixed(3)));
 }
 
-// Unit labels for an ingredient: big = kg|L (purchases), small = g|mL (dishes).
 function unitOf(ing) {
   const liquid = ing && ing.unit === "l";
   return {
+    liquid,
     big: t(liquid ? "u_l" : "u_kg"),
     small: t(liquid ? "u_ml" : "u_g"),
   };
+}
+
+function catOf(ing) {
+  return CATS.includes(ing.category) ? ing.category : "other";
 }
 
 function dateShort(iso) {
@@ -83,7 +93,6 @@ function purchaseStats(p) {
   return { usable, perBig, perSmall: perBig / 1000 };
 }
 
-// Current price comes from the most recent purchase.
 function ingredientStats(ing) {
   return purchaseStats(sortedPurchases(ing)[0]);
 }
@@ -92,16 +101,53 @@ function findIngredient(id) {
   return state.ingredients.find((i) => i.id === id) || null;
 }
 
+function findSauce(id) {
+  return state.sauces.find((s) => s.id === id) || null;
+}
+
+// Sauce batch: total grams, total cost, and cost per gram from its recipe.
+function sauceStats(sauce) {
+  const rows = (sauce && sauce.sauce_ingredients) || [];
+  let grams = 0, cost = 0, complete = rows.length > 0;
+  for (const r of rows) {
+    const st = ingredientStats(findIngredient(r.ingredient_id));
+    const g = Number(r.grams);
+    if (!st || !(g > 0)) { complete = false; continue; }
+    grams += g;
+    cost += g * st.perSmall;
+  }
+  if (!(grams > 0)) return null;
+  return { grams, cost, perG: cost / grams, complete };
+}
+
+// Dish rows: [{kind: 'ing'|'sauce', id, grams}]
+function rowUnitCost(row) {
+  if (row.kind === "sauce") {
+    const st = sauceStats(findSauce(row.id));
+    return st ? st.perG : null;
+  }
+  const st = ingredientStats(findIngredient(row.id));
+  return st ? st.perSmall : null;
+}
+
 function dishCost(rows) {
   let total = 0;
   let complete = rows.length > 0;
   for (const r of rows) {
-    const s = r.ingredient_id && ingredientStats(findIngredient(r.ingredient_id));
+    const per = r.id ? rowUnitCost(r) : null;
     const amount = Number(r.grams);
-    if (!s || !(amount > 0)) { complete = false; continue; }
-    total += amount * s.perSmall;
+    if (per == null || !(amount > 0)) { complete = false; continue; }
+    total += amount * per;
   }
   return { total, complete };
+}
+
+function dishRowsOf(dish) {
+  return (dish.dish_ingredients || []).map((r) =>
+    r.sauce_id
+      ? { kind: "sauce", id: r.sauce_id, grams: r.grams }
+      : { kind: "ing", id: r.ingredient_id, grams: r.grams }
+  );
 }
 
 /* ---------- data ---------- */
@@ -116,8 +162,16 @@ async function loadData() {
   state.ingredients = ings.data;
   state.dishes = dishes.data;
 
-  // Role lookup is best-effort: if the profiles table doesn't exist yet
-  // (migration not run), everyone keeps full access.
+  // Sauces arrive with a later migration — degrade gracefully without it.
+  const sauces = await db.from("sauces").select("*, sauce_ingredients(*)").order("name");
+  if (sauces.error) {
+    state.sauces = [];
+    state.saucesMissing = true;
+  } else {
+    state.sauces = sauces.data;
+    state.saucesMissing = false;
+  }
+
   try {
     const { data } = await db.from("profiles")
       .select("*").eq("user_id", session.user.id).maybeSingle();
@@ -127,12 +181,13 @@ async function loadData() {
   }
 }
 
-/* ---------- navigation ---------- */
+/* ---------- navigation & chrome ---------- */
 
 async function go(view) {
   state.view = view;
   draft = null;
   await render();
+  window.scrollTo(0, 0);
 }
 
 async function render() {
@@ -142,44 +197,67 @@ async function render() {
   } catch (e) {
     console.error(e);
     $app.innerHTML =
-      `<div class="topbar"><span class="brandwrap">${LOGO}<span class="brand">${APP_NAME}</span></span></div>` +
-      `<div class="error-box bad">${esc(t("load_failed"))}</div>`;
+      header({ home: true }) +
+      `<main class="content"><div class="error-box bad">${esc(t("load_failed"))}</div></main>`;
+    wireHeader();
     return;
   }
   const v = state.view;
-  // Shoppers only get the home overview and the basket screen.
-  if (!isAdmin() && (v.name === "ingredient" || v.name === "dish")) {
+  if (!isAdmin() && (v.name === "ingredient" || v.name === "dish" || v.name === "sauce")) {
     state.view = { name: "home" };
     return renderHome();
   }
   if (v.name === "ingredient") renderIngredient(v.id);
   else if (v.name === "dish") renderDish(v.id);
+  else if (v.name === "sauce") renderSauce(v.id);
   else if (v.name === "basket") renderBasket();
   else renderHome();
 }
 
-function topbar({ back } = {}) {
-  return `<div class="topbar">
+function header({ home, title } = {}) {
+  return `<header class="header">
     <span class="brandwrap">
-      ${back ? `<button class="back" id="btnBack">‹ ${esc(t("home"))}</button>` : ""}
-      ${LOGO}<span class="brand">${APP_NAME}</span>
+      ${home
+        ? `${LOGO}<span class="brand">${APP_NAME}</span>`
+        : `<button class="back" id="btnBack">‹ ${esc(t("home"))}</button>
+           <span class="htitle">${esc(title || "")}</span>`}
     </span>
     <span class="actions">
       <button class="chipbtn" id="btnLang">${LANG === "en" ? "ไทย" : "EN"}</button>
-      <button class="chipbtn" id="btnLogout">${esc(userName())} · ${esc(t("logout"))}</button>
+      ${home ? `<button class="chipbtn" id="btnLogout">${esc(userName())} ⏻</button>` : ""}
     </span>
-  </div>`;
+  </header>`;
 }
 
-function wireTopbar() {
+function wireHeader() {
   const back = document.getElementById("btnBack");
   if (back) back.onclick = () => go({ name: "home" });
-  document.getElementById("btnLang").onclick = () => { toggleLang(); render(); };
-  document.getElementById("btnLogout").onclick = async () => {
+  const lang = document.getElementById("btnLang");
+  if (lang) lang.onclick = () => { toggleLang(); render(); };
+  const out = document.getElementById("btnLogout");
+  if (out) out.onclick = async () => {
     await db.auth.signOut();
     session = null;
     renderLogin();
   };
+}
+
+function tabbar(active) {
+  return `<nav class="tabbar"><div class="inner">
+    <button class="tab ${active === "home" ? "active" : ""}" id="tabHome">
+      <span class="ticon">🏠</span>${esc(t("tab_home"))}
+    </button>
+    <button class="tab ${active === "basket" ? "active" : ""}" id="tabBasket">
+      <span class="ticon">🛒</span>${esc(t("tab_purchase"))}
+    </button>
+  </div></nav>`;
+}
+
+function wireTabbar() {
+  const h = document.getElementById("tabHome");
+  if (h) h.onclick = () => go({ name: "home" });
+  const b = document.getElementById("tabBasket");
+  if (b) b.onclick = () => go({ name: "basket" });
 }
 
 /* ---------- login ---------- */
@@ -205,10 +283,10 @@ function renderLogin(errorMsg) {
         <button class="btn" type="submit">${esc(t("login"))}</button>
       </form>
       <p class="center" style="margin-top:1.4rem">
-        <button class="chipbtn" id="btnLang">${LANG === "en" ? "ไทย" : "EN"}</button>
+        <button class="chipbtn" id="btnLangLogin">${LANG === "en" ? "ไทย" : "EN"}</button>
       </p>
     </div>`;
-  document.getElementById("btnLang").onclick = () => { toggleLang(); renderLogin(errorMsg); };
+  document.getElementById("btnLangLogin").onclick = () => { toggleLang(); renderLogin(errorMsg); };
   document.getElementById("loginForm").onsubmit = async (e) => {
     e.preventDefault();
     const email = document.getElementById("loginEmail").value.trim();
@@ -222,164 +300,280 @@ function renderLogin(errorMsg) {
 
 /* ---------- home ---------- */
 
+function ingRowHtml(ing) {
+  const s = ingredientStats(ing);
+  const u = unitOf(ing);
+  const meta = s
+    ? `${money(s.perBig)}/${u.big}`
+    : `<span class="muted">${esc(t("no_price_yet"))}</span>`;
+  return `<div class="lrow">
+    <button class="lmain" ${isAdmin() ? `data-edit-ing="${ing.id}"` : "disabled"}>
+      <span class="lname">${esc(ing.name)}</span>
+      <span class="lmeta num">${meta}</span>
+      ${isAdmin() ? `<span class="chev">›</span>` : ""}
+    </button>
+    ${isAdmin() ? `<button class="xbtn" data-del-ing="${ing.id}" aria-label="${esc(t("delete_ingredient"))}">✕</button>` : ""}
+  </div>`;
+}
+
 function renderHome() {
-  const ingRows = state.ingredients.map((ing) => {
-    const s = ingredientStats(ing);
-    const u = unitOf(ing);
-    return `<tr>
-      <td>${esc(ing.name)}</td>
-      <td class="num">${s ? `${fmtQty(s.usable)} ${u.big}` : "–"}</td>
-      <td class="num">${s ? `${money(s.perBig)}/${u.big}` : `<span class="muted">${esc(t("no_price_yet"))}</span>`}</td>
-      <td class="action">${isAdmin() ? `<button class="rowlink" data-edit-ing="${ing.id}">${esc(t("edit"))}</button>
-        <button class="rowlink x" data-del-ing="${ing.id}" aria-label="${esc(t("delete_ingredient"))}">✕</button>` : ""}</td>
-    </tr>`;
+  const admin = isAdmin();
+
+  const catSections = CATS.map((cat) => {
+    const items = state.ingredients.filter((i) => catOf(i) === cat);
+    return `<details class="group">
+      <summary>
+        <span>${esc(t("cat_" + cat))}</span>
+        <span class="gright"><span class="badge num">${items.length}</span><span class="chev">›</span></span>
+      </summary>
+      ${items.length ? items.map(ingRowHtml).join("") : `<p class="empty">${esc(t("no_ingredients"))}</p>`}
+    </details>`;
+  }).join("");
+
+  const sauceRows = state.sauces.map((s) => {
+    const st = sauceStats(s);
+    const meta = st
+      ? `${money(st.perG, 3)}/${t("u_g")}`
+      : `<span class="muted">${esc(t("no_price_yet"))}</span>`;
+    return `<div class="lrow">
+      <button class="lmain" data-edit-sauce="${s.id}">
+        <span class="lname">${esc(s.name)}</span>
+        <span class="lmeta num">${meta}</span>
+        <span class="chev">›</span>
+      </button>
+    </div>`;
   }).join("");
 
   const dishRows = state.dishes.map((d) => {
-    const rows = d.dish_ingredients || [];
+    const rows = dishRowsOf(d);
     const c = dishCost(rows);
     const sell = d.selling_price != null ? Number(d.selling_price) : null;
     const gpPct = sell > 0 && rows.length ? ((sell - c.total) / sell) * 100 : null;
-    return `<tr>
-      <td>${esc(d.name)}</td>
-      <td class="num">${rows.length ? money(c.total) + (c.complete ? "" : " *") : "–"}</td>
-      <td class="num">${sell != null ? money(sell) : "–"}</td>
-      <td class="num">${gpPct == null ? "–" : gpPct.toFixed(0) + "%"}</td>
-      <td class="action"><button class="rowlink" data-edit-dish="${d.id}">${esc(t("edit"))}</button></td>
-    </tr>`;
+    const meta = [
+      rows.length ? money(c.total) + (c.complete ? "" : "*") : "–",
+      gpPct == null ? null : gpPct.toFixed(0) + "%",
+    ].filter(Boolean).join(" · ");
+    return `<div class="lrow">
+      <button class="lmain" data-edit-dish="${d.id}">
+        <span class="lname">${esc(d.name)}</span>
+        <span class="lmeta num">${meta}</span>
+        <span class="chev">›</span>
+      </button>
+    </div>`;
   }).join("");
 
   $app.innerHTML = `
-    ${topbar()}
-    <button class="btn" id="btnBasket">🛒 ${esc(t("new_purchase"))}</button>
-    <div style="height:1.1rem"></div>
+    ${header({ home: true })}
+    <main class="content">
+      ${state.saucesMissing && admin ? `<div class="error-box">${esc(t("sauces_migration_needed"))}</div>` : ""}
 
-    <div class="card">
-      <div class="card-head">
-        <span class="card-title">${esc(t("ingredients"))}</span>
-        <span class="count num">${state.ingredients.length} ${esc(t("items"))}</span>
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">${esc(t("ingredients"))}</span>
+          <span class="count num">${state.ingredients.length} ${esc(t("items"))}</span>
+        </div>
+        ${catSections}
+        ${admin ? `<div class="card-foot"><button class="btn ghost small" id="btnAddIng">${esc(t("add_ingredient"))}</button></div>` : ""}
       </div>
-      <div class="scroll-x">
-        ${state.ingredients.length ? `<table class="list">
-          <thead><tr>
-            <th>${esc(t("ingredient"))}</th><th class="num">${esc(t("usable"))}</th>
-            <th class="num">${esc(t("unit_price"))}</th><th></th>
-          </tr></thead>
-          <tbody class="num">${ingRows}</tbody>
-        </table>` : `<p class="empty">${esc(t("no_ingredients"))}</p>`}
-      </div>
-      ${isAdmin() ? `<button class="btn ghost small" id="btnAddIng">${esc(t("add_ingredient"))}</button>` : ""}
-    </div>
 
-    ${isAdmin() ? `<div class="card">
-      <div class="card-head">
-        <span class="card-title">${esc(t("dishes"))}</span>
-        <span class="count num">${state.dishes.length} ${esc(t("items"))}</span>
-      </div>
-      <div class="scroll-x">
-        ${state.dishes.length ? `<table class="list">
-          <thead><tr>
-            <th>${esc(t("dish"))}</th><th class="num">${esc(t("cost"))}</th>
-            <th class="num">${esc(t("price"))}</th><th class="num">${esc(t("gp"))}</th><th></th>
-          </tr></thead>
-          <tbody class="num">${dishRows}</tbody>
-        </table>` : `<p class="empty">${esc(t("no_dishes"))}</p>`}
-      </div>
-      <button class="btn ghost small" id="btnAddDish">${esc(t("add_dish"))}</button>
-    </div>` : ""}`;
+      ${admin && !state.saucesMissing ? `<div class="card">
+        <div class="card-head">
+          <span class="card-title">${esc(t("sauces"))}</span>
+          <span class="count num">${state.sauces.length} ${esc(t("items"))}</span>
+        </div>
+        ${state.sauces.length ? sauceRows : `<p class="empty">${esc(t("no_sauces"))}</p>`}
+        <div class="card-foot"><button class="btn ghost small" id="btnAddSauce">${esc(t("add_sauce"))}</button></div>
+      </div>` : ""}
 
-  wireTopbar();
-  document.getElementById("btnBasket").onclick = () => go({ name: "basket" });
+      ${admin ? `<div class="card">
+        <div class="card-head">
+          <span class="card-title">${esc(t("dishes"))}</span>
+          <span class="count num">${state.dishes.length} ${esc(t("items"))}</span>
+        </div>
+        ${state.dishes.length ? dishRows : `<p class="empty">${esc(t("no_dishes"))}</p>`}
+        <div class="card-foot"><button class="btn ghost small" id="btnAddDish">${esc(t("add_dish"))}</button></div>
+      </div>` : ""}
+    </main>
+    ${tabbar("home")}`;
+
+  wireHeader();
+  wireTabbar();
   const addIng = document.getElementById("btnAddIng");
   if (addIng) addIng.onclick = () => go({ name: "ingredient", id: null });
+  const addSauce = document.getElementById("btnAddSauce");
+  if (addSauce) addSauce.onclick = () => go({ name: "sauce", id: null });
   const addDish = document.getElementById("btnAddDish");
   if (addDish) addDish.onclick = () => go({ name: "dish", id: null });
+
   $app.querySelectorAll("[data-edit-ing]").forEach((b) => {
     b.onclick = () => go({ name: "ingredient", id: b.dataset.editIng });
+  });
+  $app.querySelectorAll("[data-edit-sauce]").forEach((b) => {
+    b.onclick = () => go({ name: "sauce", id: b.dataset.editSauce });
+  });
+  $app.querySelectorAll("[data-edit-dish]").forEach((b) => {
+    b.onclick = () => go({ name: "dish", id: b.dataset.editDish });
   });
   $app.querySelectorAll("[data-del-ing]").forEach((b) => {
     b.onclick = async () => {
       if (!confirm(t("confirm_delete"))) return;
       const { error } = await db.from("ingredients").delete().eq("id", b.dataset.delIng);
       if (error) {
-        // 23503 = foreign key violation: the ingredient is used by a dish.
+        // 23503 = foreign key violation: used by a dish or sauce.
         alert(error.code === "23503" ? t("ing_in_use") : t("save_failed"));
         return;
       }
       render();
     };
   });
-  $app.querySelectorAll("[data-edit-dish]").forEach((b) => {
-    b.onclick = () => go({ name: "dish", id: b.dataset.editDish });
-  });
+}
+
+/* ---------- full-screen searchable picker ---------- */
+
+// groups: [{title, items: [{kind, id, label, sub}]}]; onPick(item)
+function openPicker(groups, onPick) {
+  const overlay = document.createElement("div");
+  overlay.className = "picker";
+  const groupHtml = () => groups.map((g, gi) => {
+    const q = overlay.querySelector("input") ? overlay.querySelector("input").value.trim().toLowerCase() : "";
+    const items = g.items.filter((it) => !q || it.label.toLowerCase().includes(q));
+    if (!items.length) return "";
+    return `<div class="pgroup">
+      <p class="pgtitle">${esc(g.title)}</p>
+      <div class="pgbody">
+        ${items.map((it) => `<button class="prow" data-g="${gi}" data-id="${it.id}" data-kind="${it.kind}">
+          <span class="pname">${esc(it.label)}</span>
+          <span class="psub num">${it.sub || ""}</span>
+        </button>`).join("")}
+      </div>
+    </div>`;
+  }).join("");
+
+  overlay.innerHTML = `
+    <div class="phead">
+      <input type="search" placeholder="${esc(t("search"))}" aria-label="${esc(t("search"))}">
+      <button class="pcancel">${esc(t("cancel"))}</button>
+    </div>
+    <div class="pbody">${""}</div>`;
+  document.body.appendChild(overlay);
+  document.body.style.overflow = "hidden";
+
+  const close = () => { overlay.remove(); document.body.style.overflow = ""; };
+  const body = overlay.querySelector(".pbody");
+  const refresh = () => {
+    body.innerHTML = groupHtml();
+    body.querySelectorAll(".prow").forEach((btn) => {
+      btn.onclick = () => {
+        const g = groups[Number(btn.dataset.g)];
+        const item = g.items.find((it) => String(it.id) === btn.dataset.id && it.kind === btn.dataset.kind);
+        close();
+        onPick(item);
+      };
+    });
+  };
+  overlay.querySelector(".pcancel").onclick = close;
+  overlay.querySelector("input").oninput = refresh;
+  refresh();
+  overlay.querySelector("input").focus();
+}
+
+function ingPickItem(ing) {
+  const s = ingredientStats(ing);
+  const u = unitOf(ing);
+  return {
+    kind: "ing", id: ing.id, label: ing.name,
+    sub: s ? `${money(s.perBig)}/${u.big}` : esc(t("no_price_yet")),
+  };
+}
+
+function ingredientPickerGroups({ cats = CATS, includeSauceRecipes = false } = {}) {
+  const groups = [];
+  if (includeSauceRecipes) {
+    // Dish picker order per spec: meat, vegetables, sauces, then the rest.
+    const meat = state.ingredients.filter((i) => catOf(i) === "meat");
+    const veg = state.ingredients.filter((i) => catOf(i) === "veg");
+    const sauceIngs = state.ingredients.filter((i) => catOf(i) === "sauce");
+    const other = state.ingredients.filter((i) => catOf(i) === "other");
+    groups.push({ title: t("cat_meat"), items: meat.map(ingPickItem) });
+    groups.push({ title: t("cat_veg"), items: veg.map(ingPickItem) });
+    groups.push({
+      title: t("sauces"),
+      items: [
+        ...state.sauces.map((s) => {
+          const st = sauceStats(s);
+          return {
+            kind: "sauce", id: s.id, label: `🥣 ${s.name}`,
+            sub: st ? `${money(st.perG, 3)}/${t("u_g")}` : esc(t("no_price_yet")),
+          };
+        }),
+        ...sauceIngs.map(ingPickItem),
+      ],
+    });
+    groups.push({ title: t("cat_other"), items: other.map(ingPickItem) });
+  } else {
+    for (const cat of cats) {
+      const items = state.ingredients.filter((i) => catOf(i) === cat);
+      if (items.length) groups.push({ title: t("cat_" + cat), items: items.map(ingPickItem) });
+    }
+  }
+  return groups.filter((g) => g.items.length);
+}
+
+function pickedLabel(row) {
+  if (!row.id) return null;
+  if (row.kind === "sauce") {
+    const s = findSauce(row.id);
+    return s ? `🥣 ${s.name}` : null;
+  }
+  const i = findIngredient(row.id);
+  return i ? i.name : null;
+}
+
+function rowSuffix(row) {
+  if (row.kind === "sauce" || !row.id) return t("u_g");
+  const i = findIngredient(row.id);
+  return i ? unitOf(i).small : t("u_g");
 }
 
 /* ---------- basket: record a whole shopping trip ---------- */
 
-function ingSelectHtml(attr, selected) {
-  return `<select ${attr}>
-    <option value="">${esc(t("select_ingredient"))}</option>
-    ${state.ingredients.map((i) => {
-      const s = ingredientStats(i);
-      const u = unitOf(i);
-      const label = `${i.name}${s ? ` (${money(s.perBig)}/${u.big})` : ""}`;
-      return `<option value="${i.id}" ${i.id === selected ? "selected" : ""}>${esc(label)}</option>`;
-    }).join("")}
-  </select>`;
-}
-
 function renderBasket(existingDraft) {
-  draft = existingDraft || { rows: [{ ingredient_id: "", qty: "", price: "" }] };
+  draft = existingDraft || { rows: [{ id: "", qty: "", price: "" }] };
 
   const rowsHtml = draft.rows.map((r, idx) => {
-    const ing = findIngredient(r.ingredient_id);
+    const ing = findIngredient(r.id);
+    const label = ing ? ing.name : null;
     const suffix = ing ? unitOf(ing).big : t("u_kg");
-    return `<tr>
-      <td style="min-width:11rem">${ingSelectHtml(`data-b-ing="${idx}"`, r.ingredient_id)}</td>
-      <td class="num" style="width:7.2rem">
-        <span style="display:inline-flex; align-items:center; gap:0.3rem">
-          <input type="number" data-b-qty="${idx}" step="0.001" min="0" inputmode="decimal"
-            value="${esc(r.qty)}" aria-label="${esc(t("amount"))}" style="width:4.6rem">
-          <span class="muted" style="font-size:0.75rem" id="bSfx${idx}">${esc(suffix)}</span>
-        </span>
-      </td>
-      <td class="num" style="width:5.6rem">
-        <input type="number" data-b-price="${idx}" step="0.01" min="0" inputmode="decimal"
-          value="${esc(r.price)}" aria-label="${esc(t("price"))}">
-      </td>
-      <td class="action"><button class="rowlink x" data-b-del="${idx}" aria-label="${esc(t("delete"))}">✕</button></td>
-    </tr>`;
+    return `<div class="erow">
+      <button class="pickbtn ${label ? "" : "placeholder"}" data-b-pick="${idx}">
+        ${esc(label || t("choose_item"))}
+      </button>
+      <input type="number" class="amt" data-b-qty="${idx}" step="0.001" min="0"
+        inputmode="decimal" value="${esc(r.qty)}" aria-label="${esc(t("amount"))}">
+      <span class="sfx" id="bSfx${idx}">${esc(suffix)}</span>
+      <input type="number" class="amt" data-b-price="${idx}" step="0.01" min="0"
+        inputmode="decimal" value="${esc(r.price)}" aria-label="${esc(t("price"))}" placeholder="$">
+      <button class="xbtn" data-b-del="${idx}" aria-label="${esc(t("delete"))}">✕</button>
+    </div>`;
   }).join("");
 
   $app.innerHTML = `
-    ${topbar({ back: true })}
-    <h2 style="margin:0.2rem 0 0.4rem; font-size:1.15rem">🛒 ${esc(t("new_purchase"))}</h2>
-    <p class="muted" style="margin:0 0 1rem; font-size:0.85rem">${esc(t("basket_hint"))}</p>
+    ${header({ title: `🛒 ${t("new_purchase")}` })}
+    <main class="content">
+      <p class="muted" style="margin:0.2rem 0 0.8rem; font-size:0.85rem">${esc(t("basket_hint"))}</p>
+      ${rowsHtml}
+      <button class="btn ghost small" id="btnAddRow">${esc(t("add_item"))}</button>
+      <div class="calc">
+        <div class="crow num"><span>${esc(t("basket_total"))}</span><strong id="basketTotal">$0.00</strong></div>
+      </div>
+      <button class="btn" id="btnSave">${esc(t("save_all"))}</button>
+    </main>
+    ${tabbar("basket")}`;
 
-    <div class="scroll-x">
-      <table class="list">
-        <thead><tr>
-          <th>${esc(t("ingredient"))}</th><th class="num">${esc(t("amount"))}</th>
-          <th class="num">${esc(t("price"))} ($)</th><th></th>
-        </tr></thead>
-        <tbody class="num">${rowsHtml}</tbody>
-      </table>
-    </div>
-    <button class="btn ghost small" id="btnAddRow">${esc(t("add_item"))}</button>
-
-    <div class="calc">
-      <div class="caption">${esc(t("basket_total"))}</div>
-      <div class="crow num"><span>${esc(t("basket_total"))}</span><strong id="basketTotal">$0.00</strong></div>
-    </div>
-
-    <button class="btn" id="btnSave">${esc(t("save_all"))}</button>`;
-
-  wireTopbar();
+  wireHeader();
+  wireTabbar();
 
   const captureDraft = () => {
-    $app.querySelectorAll("[data-b-ing]").forEach((sel) => {
-      draft.rows[Number(sel.dataset.bIng)].ingredient_id = sel.value;
-    });
     $app.querySelectorAll("[data-b-qty]").forEach((inp) => {
       draft.rows[Number(inp.dataset.bQty)].qty = inp.value;
     });
@@ -387,21 +581,19 @@ function renderBasket(existingDraft) {
       draft.rows[Number(inp.dataset.bPrice)].price = inp.value;
     });
   };
-
   const updateTotal = () => {
-    const total = draft.rows.reduce((sum, r) => {
-      const p = Number(r.price);
-      return sum + (p > 0 ? p : 0);
-    }, 0);
+    const total = draft.rows.reduce((sum, r) => sum + (Number(r.price) > 0 ? Number(r.price) : 0), 0);
     document.getElementById("basketTotal").textContent = money(total);
   };
 
-  $app.querySelectorAll("[data-b-ing]").forEach((sel) => {
-    sel.onchange = () => {
-      const idx = Number(sel.dataset.bIng);
-      draft.rows[idx].ingredient_id = sel.value;
-      const ing = findIngredient(sel.value);
-      document.getElementById(`bSfx${idx}`).textContent = ing ? unitOf(ing).big : t("u_kg");
+  $app.querySelectorAll("[data-b-pick]").forEach((btn) => {
+    btn.onclick = () => {
+      const idx = Number(btn.dataset.bPick);
+      openPicker(ingredientPickerGroups(), (item) => {
+        captureDraft();
+        draft.rows[idx].id = item.id;
+        renderBasket({ ...draft });
+      });
     };
   });
   $app.querySelectorAll("[data-b-qty]").forEach((inp) => {
@@ -414,26 +606,26 @@ function renderBasket(existingDraft) {
     b.onclick = () => {
       captureDraft();
       draft.rows.splice(Number(b.dataset.bDel), 1);
-      if (!draft.rows.length) draft.rows.push({ ingredient_id: "", qty: "", price: "" });
+      if (!draft.rows.length) draft.rows.push({ id: "", qty: "", price: "" });
       renderBasket({ ...draft });
     };
   });
   document.getElementById("btnAddRow").onclick = () => {
     captureDraft();
-    draft.rows.push({ ingredient_id: "", qty: "", price: "" });
+    draft.rows.push({ id: "", qty: "", price: "" });
     renderBasket({ ...draft });
   };
 
   document.getElementById("btnSave").onclick = async () => {
     captureDraft();
-    const filled = draft.rows.filter((r) => r.ingredient_id || r.qty !== "" || r.price !== "");
+    const filled = draft.rows.filter((r) => r.id || r.qty !== "" || r.price !== "");
     const valid = filled.filter(
-      (r) => r.ingredient_id && Number(r.qty) > 0 && Number(r.price) >= 0 && r.price !== ""
+      (r) => r.id && Number(r.qty) > 0 && r.price !== "" && Number(r.price) >= 0
     );
     if (!valid.length || valid.length !== filled.length) return alert(t("need_basket"));
     try {
       const { error } = await db.from("purchases").insert(valid.map((r) => ({
-        ingredient_id: r.ingredient_id,
+        ingredient_id: r.id,
         purchased_kg: Number(r.qty),
         price_paid: Number(r.price),
         wastage_kg: 0,
@@ -455,12 +647,22 @@ function renderIngredient(id, existingDraft) {
   const ing = id ? findIngredient(id) : null;
   if (id && !ing) return go({ name: "home" });
   const isNew = !ing;
+  const latest = ing ? sortedPurchases(ing)[0] : null;
+  const latestAfter = latest
+    ? Number(latest.purchased_kg) - Number(latest.wastage_kg || 0)
+    : null;
+
   draft = existingDraft || {
     name: ing ? ing.name : "",
     unit: ing ? ing.unit || "kg" : "kg",
-    pQty: "", pPrice: "", pWaste: "0",
+    category: ing ? catOf(ing) : "other",
+    pQty: latest ? fmtQty(latest.purchased_kg) : "",
+    pPrice: latest ? String(Number(latest.price_paid)) : "",
+    pAfter: latest && Number(latest.wastage_kg) > 0 ? fmtQty(latestAfter) : "",
   };
   const u = unitOf({ unit: draft.unit });
+  const boughtLbl = t(u.liquid ? "bought_v" : "bought_w");
+  const afterLbl = t(u.liquid ? "after_v" : "after_w");
 
   const history = ing ? sortedPurchases(ing) : [];
   const historyRows = history.map((p, idx) => {
@@ -469,7 +671,7 @@ function renderIngredient(id, existingDraft) {
       <td>${dateShort(p.purchased_at)}</td>
       <td class="num">${fmtQty(p.purchased_kg)} ${u.big}</td>
       <td class="num">${money(p.price_paid)}</td>
-      <td class="num">${fmtQty(p.wastage_kg)} ${u.big}</td>
+      <td class="num">${fmtQty(Number(p.purchased_kg) - Number(p.wastage_kg || 0))} ${u.big}</td>
       <td class="num">${s ? money(s.perBig) : "–"}</td>
       <td>${esc(p.entered_by || "")}</td>
       <td class="action"><button class="rowlink x" data-del-purchase="${p.id}" aria-label="${esc(t("delete"))}">✕</button></td>
@@ -477,133 +679,143 @@ function renderIngredient(id, existingDraft) {
   }).join("");
 
   $app.innerHTML = `
-    ${topbar({ back: true })}
-    <h2 style="margin:0.2rem 0 1rem; font-size:1.15rem">
-      ${esc(isNew ? t("new_ingredient") : t("edit_ingredient"))}
-    </h2>
-    <div class="field">
-      <label for="ingName">${esc(t("ingredient_name"))}</label>
-      <input type="text" id="ingName" value="${esc(draft.name)}">
-    </div>
-    <div class="field">
-      <label for="ingUnit">${esc(t("unit"))}</label>
-      <select id="ingUnit">
-        <option value="kg" ${draft.unit === "kg" ? "selected" : ""}>${esc(t("unit_kg"))}</option>
-        <option value="l" ${draft.unit === "l" ? "selected" : ""}>${esc(t("unit_l"))}</option>
-      </select>
-    </div>
-
-    <p class="section-label">${esc(isNew ? t("first_purchase") : t("record_purchase"))}</p>
-    <div class="row2">
+    ${header({ title: isNew ? t("new_ingredient") : t("edit_ingredient") })}
+    <main class="content no-tabs">
       <div class="field">
-        <label for="pQty">${esc(t("purchased_lbl"))} (${esc(u.big)})</label>
-        <input type="number" id="pQty" step="0.001" min="0" inputmode="decimal" value="${esc(draft.pQty)}">
+        <label for="ingName">${esc(t("ingredient_name"))}</label>
+        <input type="text" id="ingName" value="${esc(draft.name)}">
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="ingCat">${esc(t("category"))}</label>
+          <select id="ingCat">
+            ${CATS.map((c) => `<option value="${c}" ${draft.category === c ? "selected" : ""}>${esc(t("cat_" + c))}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label for="ingUnit">${esc(t("unit"))}</label>
+          <select id="ingUnit">
+            <option value="kg" ${draft.unit === "kg" ? "selected" : ""}>${esc(t("unit_kg"))}</option>
+            <option value="l" ${draft.unit === "l" ? "selected" : ""}>${esc(t("unit_l"))}</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row2">
+        <div class="field">
+          <label for="pQty">${esc(boughtLbl)} (${esc(u.big)})</label>
+          <input type="number" id="pQty" step="0.001" min="0" inputmode="decimal" value="${esc(draft.pQty)}">
+        </div>
+        <div class="field">
+          <label for="pPrice">${esc(t("price_paid"))}</label>
+          <input type="number" id="pPrice" step="0.01" min="0" inputmode="decimal" value="${esc(draft.pPrice)}">
+        </div>
       </div>
       <div class="field">
-        <label for="pPrice">${esc(t("price_paid"))}</label>
-        <input type="number" id="pPrice" step="0.01" min="0" inputmode="decimal" value="${esc(draft.pPrice)}">
+        <label for="pAfter">${esc(afterLbl)} (${esc(u.big)})</label>
+        <input type="number" id="pAfter" step="0.001" min="0" inputmode="decimal"
+          value="${esc(draft.pAfter)}" placeholder="${esc(t("after_hint"))}">
       </div>
-    </div>
-    <div class="field">
-      <label for="pWaste">${esc(t("wastage_full"))} (${esc(u.big)}) — ${esc(t("wastage_hint"))}</label>
-      <input type="number" id="pWaste" step="0.001" min="0" inputmode="decimal" value="${esc(draft.pWaste)}">
-    </div>
 
-    <div class="calc">
-      <div class="caption">${esc(t("auto_calc"))}</div>
-      <div class="crow num"><span>${esc(t("usable_weight"))}</span><span id="calcUsable">–</span></div>
-      <div class="crow num"><span>${esc(t("price_per"))} ${esc(u.big)}</span><strong id="calcPerBig">–</strong></div>
-      <div class="crow num"><span>${esc(t("price_per"))} ${esc(u.small)}</span><strong id="calcPerSmall">–</strong></div>
-    </div>
+      <div class="calc">
+        <div class="caption">${esc(t("auto_calc"))}</div>
+        <div class="crow num"><span>${esc(t("usable_weight"))}</span><span id="calcUsable">–</span></div>
+        <div class="crow num"><span>${esc(t("price_per"))} ${esc(u.big)}</span><strong id="calcPerBig">–</strong></div>
+        <div class="crow num"><span>${esc(t("price_per"))} ${esc(u.small)}</span><strong id="calcPerSmall">–</strong></div>
+      </div>
 
-    ${isNew ? "" : `<button class="btn ghost small" id="btnAddPurchase">${esc(t("add_purchase"))}</button>
+      <button class="btn" id="btnSave">${esc(t("save"))}</button>
 
-    <p class="section-label">${esc(t("purchase_history"))}</p>
-    <div class="scroll-x">
-      ${history.length ? `<table class="list">
-        <thead><tr>
-          <th>${esc(t("date"))}</th><th class="num">${esc(t("purchased"))}</th>
-          <th class="num">${esc(t("price"))}</th><th class="num">${esc(t("wastage"))}</th>
-          <th class="num">${esc(t("unit_price"))}</th><th>${esc(t("by"))}</th><th></th>
-        </tr></thead>
-        <tbody class="num">${historyRows}</tbody>
-      </table>` : `<p class="empty">${esc(t("no_purchases"))}</p>`}
-    </div>`}
+      ${isNew ? "" : `
+      <p class="section-label">${esc(t("purchase_history"))}</p>
+      <div class="card"><div class="scroll-x" style="padding:0.3rem 0.6rem">
+        ${history.length ? `<table class="list">
+          <thead><tr>
+            <th>${esc(t("date"))}</th><th class="num">${esc(t("purchased"))}</th>
+            <th class="num">${esc(t("price"))}</th><th class="num">${esc(afterLbl)}</th>
+            <th class="num">${esc(t("unit_price"))}</th><th>${esc(t("by"))}</th><th></th>
+          </tr></thead>
+          <tbody class="num">${historyRows}</tbody>
+        </table>` : `<p class="empty" style="border:none">${esc(t("no_purchases"))}</p>`}
+      </div></div>
+      <button class="btn danger-link" id="btnDelete">${esc(t("delete_ingredient"))}</button>
+      <p class="meta-line num">${esc(ing.updated_by || "")} · ${dateShort(ing.updated_at)}</p>`}
+    </main>`;
 
-    <button class="btn" id="btnSave">${esc(t("save"))}</button>
-    ${isNew ? "" : `<button class="btn danger-link" id="btnDelete">${esc(t("delete_ingredient"))}</button>
-    <p class="meta-line num">${esc(ing.updated_by || "")} · ${dateShort(ing.updated_at)}</p>`}`;
+  wireHeader();
 
-  wireTopbar();
-
-  const inputs = ["pQty", "pPrice", "pWaste"].map((i) => document.getElementById(i));
+  const inputs = ["pQty", "pPrice", "pAfter"].map((i) => document.getElementById(i));
   const captureDraft = () => {
     draft.name = document.getElementById("ingName").value;
+    draft.category = document.getElementById("ingCat").value;
     draft.unit = document.getElementById("ingUnit").value;
     draft.pQty = inputs[0].value;
     draft.pPrice = inputs[1].value;
-    draft.pWaste = inputs[2].value;
+    draft.pAfter = inputs[2].value;
+  };
+
+  const readPurchase = () => {
+    const bought = inputs[0].value.trim();
+    const price = inputs[1].value.trim();
+    const after = inputs[2].value.trim();
+    if (!bought && !price) return { empty: true };
+    const b = Number(bought);
+    const pr = Number(price);
+    const af = after === "" ? b : Number(after);
+    if (!(b > 0) || !(pr >= 0) || price === "" || !(af > 0)) {
+      alert(t("bad_numbers")); return { invalid: true };
+    }
+    if (af > b) { alert(t("after_too_big")); return { invalid: true }; }
+    return { p: { purchased_kg: b, price_paid: pr, wastage_kg: b - af } };
   };
 
   const updateCalc = () => {
-    const s = purchaseStats({
-      purchased_kg: inputs[0].value, price_paid: inputs[1].value, wastage_kg: inputs[2].value,
-    });
+    const bought = Number(inputs[0].value);
+    const price = Number(inputs[1].value);
+    const after = inputs[2].value.trim() === "" ? bought : Number(inputs[2].value);
+    const s = (bought > 0 && after > 0 && after <= bought && inputs[1].value.trim() !== "")
+      ? { usable: after, perBig: price / after, perSmall: price / after / 1000 }
+      : null;
     document.getElementById("calcUsable").textContent = s ? `${fmtQty(s.usable)} ${u.big}` : "–";
     document.getElementById("calcPerBig").textContent = s ? money(s.perBig) : "–";
     document.getElementById("calcPerSmall").textContent = s ? money(s.perSmall, 4) : "–";
   };
   inputs.forEach((i) => (i.oninput = updateCalc));
 
-  // Changing the unit relabels the form — re-render, keeping typed values.
   document.getElementById("ingUnit").onchange = () => {
     captureDraft();
     renderIngredient(id, { ...draft });
-  };
-
-  const readPurchase = ({ required }) => {
-    const purchased = inputs[0].value.trim();
-    const price = inputs[1].value.trim();
-    const waste = inputs[2].value.trim();
-    if (!purchased && !price) {
-      if (required) { alert(t("need_purchase")); return { invalid: true }; }
-      return { empty: true };
-    }
-    const p = { purchased_kg: Number(purchased), price_paid: Number(price), wastage_kg: Number(waste || 0) };
-    if (!(p.purchased_kg > 0) || p.price_paid < 0 || isNaN(p.price_paid) || p.wastage_kg < 0) {
-      alert(t("bad_numbers")); return { invalid: true };
-    }
-    if (p.wastage_kg >= p.purchased_kg) { alert(t("wastage_too_big")); return { invalid: true }; }
-    return { p };
-  };
-
-  const insertPurchase = async (ingredientId, p) => {
-    const { error } = await db.from("purchases").insert({
-      ingredient_id: ingredientId, ...p, entered_by: userName(),
-    });
-    if (error) throw error;
   };
 
   document.getElementById("btnSave").onclick = async () => {
     captureDraft();
     const name = draft.name.trim();
     if (!name) return alert(t("need_name"));
+    const r = readPurchase();
+    if (r.invalid) return;
+    // Only record a new purchase when the numbers changed (or first entry).
+    const changed = r.p && (!latest ||
+      Number(latest.purchased_kg) !== r.p.purchased_kg ||
+      Number(latest.price_paid) !== r.p.price_paid ||
+      Number(latest.wastage_kg || 0) !== r.p.wastage_kg);
     try {
+      let ingredientId = id;
+      const fields = { name, unit: draft.unit, category: draft.category, updated_by: userName() };
       if (isNew) {
-        const r = readPurchase({ required: false });
-        if (r.invalid) return;
-        const { data, error } = await db.from("ingredients")
-          .insert({ name, unit: draft.unit, updated_by: userName() }).select().single();
+        const { data, error } = await db.from("ingredients").insert(fields).select().single();
         if (error) throw error;
-        if (r.p) await insertPurchase(data.id, r.p);
+        ingredientId = data.id;
       } else {
-        const r = readPurchase({ required: false });
-        if (r.invalid) return;
         const { error } = await db.from("ingredients")
-          .update({ name, unit: draft.unit, updated_at: new Date().toISOString(), updated_by: userName() })
-          .eq("id", ing.id);
+          .update({ ...fields, updated_at: new Date().toISOString() })
+          .eq("id", ingredientId);
         if (error) throw error;
-        if (r.p) await insertPurchase(ing.id, r.p);
+      }
+      if (changed) {
+        const { error } = await db.from("purchases").insert({
+          ingredient_id: ingredientId, ...r.p, entered_by: userName(),
+        });
+        if (error) throw error;
       }
       go({ name: "home" });
     } catch (e) {
@@ -612,20 +824,10 @@ function renderIngredient(id, existingDraft) {
   };
 
   if (!isNew) {
-    document.getElementById("btnAddPurchase").onclick = async () => {
-      const r = readPurchase({ required: true });
-      if (!r.p) return;
-      try {
-        await insertPurchase(ing.id, r.p);
-        go({ name: "ingredient", id: ing.id });
-      } catch (e) { console.error(e); alert(t("save_failed")); }
-    };
-
     document.getElementById("btnDelete").onclick = async () => {
       if (!confirm(t("confirm_delete"))) return;
       const { error } = await db.from("ingredients").delete().eq("id", ing.id);
       if (error) {
-        // 23503 = foreign key violation: the ingredient is referenced by a dish.
         alert(error.code === "23503" ? t("ing_in_use") : t("save_failed"));
         return;
       }
@@ -645,6 +847,156 @@ function renderIngredient(id, existingDraft) {
   updateCalc();
 }
 
+/* ---------- sauce editor ---------- */
+
+function renderSauce(id, existingDraft) {
+  const sauce = id ? findSauce(id) : null;
+  if (id && !sauce) return go({ name: "home" });
+  const isNew = !sauce;
+  draft = existingDraft || {
+    name: sauce ? sauce.name : "",
+    rows: sauce && (sauce.sauce_ingredients || []).length
+      ? sauce.sauce_ingredients.map((r) => ({ id: r.ingredient_id, grams: String(r.grams) }))
+      : [{ id: "", grams: "" }],
+  };
+
+  const rowsHtml = draft.rows.map((r, idx) => {
+    const ing = findIngredient(r.id);
+    const label = ing ? ing.name : null;
+    const suffix = ing ? unitOf(ing).small : t("u_g");
+    return `<div class="erow">
+      <button class="pickbtn ${label ? "" : "placeholder"}" data-s-pick="${idx}">
+        ${esc(label || t("choose_item"))}
+      </button>
+      <input type="number" class="amt" data-s-g="${idx}" step="1" min="0"
+        inputmode="numeric" value="${esc(r.grams)}" aria-label="${esc(t("amount"))}">
+      <span class="sfx" id="sSfx${idx}">${esc(suffix)}</span>
+      <span class="rcost num" id="sCost${idx}">–</span>
+      <button class="xbtn" data-s-del="${idx}" aria-label="${esc(t("delete"))}">✕</button>
+    </div>`;
+  }).join("");
+
+  $app.innerHTML = `
+    ${header({ title: isNew ? t("new_sauce") : t("edit_sauce") })}
+    <main class="content no-tabs">
+      <div class="field">
+        <label for="sauceName">${esc(t("sauce_name"))}</label>
+        <input type="text" id="sauceName" value="${esc(draft.name)}">
+      </div>
+
+      <p class="section-label">${esc(t("cat_sauce"))}</p>
+      ${rowsHtml}
+      <button class="btn ghost small" id="btnAddRow">${esc(t("add_row"))}</button>
+
+      <div class="calc">
+        <div class="caption">${esc(t("auto_calc"))}</div>
+        <div class="crow num"><span>${esc(t("batch_size"))}</span><span id="batchSize">–</span></div>
+        <div class="crow num"><span>${esc(t("batch_cost"))}</span><span id="batchCost">–</span></div>
+        <div class="crow num"><span>${esc(t("cost_per_g"))}</span><strong id="perG">–</strong></div>
+      </div>
+
+      <button class="btn" id="btnSave">${esc(t("save"))}</button>
+      ${isNew ? "" : `<button class="btn danger-link" id="btnDelete">${esc(t("delete_sauce"))}</button>
+      <p class="meta-line num">${esc(sauce.updated_by || "")} · ${dateShort(sauce.updated_at)}</p>`}
+    </main>`;
+
+  wireHeader();
+
+  const captureDraft = () => {
+    draft.name = document.getElementById("sauceName").value;
+  };
+
+  const updateTotals = () => {
+    let grams = 0, cost = 0;
+    draft.rows.forEach((r, idx) => {
+      const st = r.id && ingredientStats(findIngredient(r.id));
+      const g = Number(r.grams);
+      const cell = document.getElementById(`sCost${idx}`);
+      if (st && g > 0) {
+        if (cell) cell.textContent = money(g * st.perSmall);
+        grams += g;
+        cost += g * st.perSmall;
+      } else if (cell) cell.textContent = "–";
+    });
+    document.getElementById("batchSize").textContent = grams > 0 ? `${fmtQty(grams)} ${t("u_g")}` : "–";
+    document.getElementById("batchCost").textContent = grams > 0 ? money(cost) : "–";
+    document.getElementById("perG").textContent = grams > 0 ? money(cost / grams, 4) : "–";
+  };
+
+  // Sauce recipes are built from "sauce ingredients".
+  $app.querySelectorAll("[data-s-pick]").forEach((btn) => {
+    btn.onclick = () => {
+      const idx = Number(btn.dataset.sPick);
+      openPicker(ingredientPickerGroups({ cats: ["sauce", "veg", "other", "meat"] }), (item) => {
+        captureDraft();
+        draft.rows[idx].id = item.id;
+        renderSauce(id, { ...draft });
+      });
+    };
+  });
+  $app.querySelectorAll("[data-s-g]").forEach((inp) => {
+    inp.oninput = () => { draft.rows[Number(inp.dataset.sG)].grams = inp.value; updateTotals(); };
+  });
+  $app.querySelectorAll("[data-s-del]").forEach((b) => {
+    b.onclick = () => {
+      captureDraft();
+      draft.rows.splice(Number(b.dataset.sDel), 1);
+      if (!draft.rows.length) draft.rows.push({ id: "", grams: "" });
+      renderSauce(id, { ...draft });
+    };
+  });
+  document.getElementById("btnAddRow").onclick = () => {
+    captureDraft();
+    draft.rows.push({ id: "", grams: "" });
+    renderSauce(id, { ...draft });
+  };
+
+  document.getElementById("btnSave").onclick = async () => {
+    captureDraft();
+    const name = draft.name.trim();
+    if (!name) return alert(t("need_name"));
+    const rows = draft.rows
+      .filter((r) => r.id && Number(r.grams) > 0)
+      .map((r) => ({ ingredient_id: r.id, grams: Number(r.grams) }));
+    try {
+      let sauceId = id;
+      const fields = { name, updated_at: new Date().toISOString(), updated_by: userName() };
+      if (isNew) {
+        const { data, error } = await db.from("sauces").insert(fields).select().single();
+        if (error) throw error;
+        sauceId = data.id;
+      } else {
+        const { error } = await db.from("sauces").update(fields).eq("id", sauceId);
+        if (error) throw error;
+        const del = await db.from("sauce_ingredients").delete().eq("sauce_id", sauceId);
+        if (del.error) throw del.error;
+      }
+      if (rows.length) {
+        const ins = await db.from("sauce_ingredients")
+          .insert(rows.map((r) => ({ sauce_id: sauceId, ...r })));
+        if (ins.error) throw ins.error;
+      }
+      go({ name: "home" });
+    } catch (e) {
+      console.error(e); alert(t("save_failed"));
+    }
+  };
+
+  if (!isNew) {
+    document.getElementById("btnDelete").onclick = async () => {
+      if (!confirm(t("confirm_delete"))) return;
+      const { error } = await db.from("sauces").delete().eq("id", sauce.id);
+      if (error) {
+        alert(error.code === "23503" ? t("sauce_in_use") : t("save_failed"));
+        return;
+      }
+      go({ name: "home" });
+    };
+  }
+
+  updateTotals();
+}
+
 /* ---------- dish editor ---------- */
 
 function renderDish(id, existingDraft) {
@@ -655,67 +1007,55 @@ function renderDish(id, existingDraft) {
     name: dish ? dish.name : "",
     selling_price: dish && dish.selling_price != null ? String(dish.selling_price) : "",
     rows: dish && (dish.dish_ingredients || []).length
-      ? dish.dish_ingredients.map((r) => ({ ingredient_id: r.ingredient_id, grams: String(r.grams) }))
-      : [{ ingredient_id: "", grams: "" }],
+      ? dishRowsOf(dish).map((r) => ({ ...r, grams: String(r.grams) }))
+      : [{ kind: "ing", id: "", grams: "" }],
   };
 
   const rowsHtml = draft.rows.map((r, idx) => {
-    const ing = findIngredient(r.ingredient_id);
-    const suffix = ing ? unitOf(ing).small : t("u_g");
-    return `<tr>
-      <td style="min-width:11rem">${ingSelectHtml(`data-row-ing="${idx}"`, r.ingredient_id)}</td>
-      <td class="num" style="width:7rem">
-        <span style="display:inline-flex; align-items:center; gap:0.3rem">
-          <input type="number" data-row-g="${idx}" step="1" min="0" inputmode="numeric"
-            value="${esc(r.grams)}" aria-label="${esc(t("amount"))}" style="width:4.2rem">
-          <span class="muted" style="font-size:0.75rem" id="dSfx${idx}">${esc(suffix)}</span>
-        </span>
-      </td>
-      <td class="num" id="rowCost${idx}" style="width:5rem">–</td>
-      <td class="action"><button class="rowlink x" data-row-del="${idx}" aria-label="${esc(t("delete"))}">✕</button></td>
-    </tr>`;
+    const label = pickedLabel(r);
+    return `<div class="erow">
+      <button class="pickbtn ${label ? "" : "placeholder"}" data-d-pick="${idx}">
+        ${esc(label || t("choose_item"))}
+      </button>
+      <input type="number" class="amt" data-d-g="${idx}" step="1" min="0"
+        inputmode="numeric" value="${esc(r.grams)}" aria-label="${esc(t("amount"))}">
+      <span class="sfx" id="dSfx${idx}">${esc(rowSuffix(r))}</span>
+      <span class="rcost num" id="dCost${idx}">–</span>
+      <button class="xbtn" data-d-del="${idx}" aria-label="${esc(t("delete"))}">✕</button>
+    </div>`;
   }).join("");
 
   $app.innerHTML = `
-    ${topbar({ back: true })}
-    <h2 style="margin:0.2rem 0 1rem; font-size:1.15rem">
-      ${esc(isNew ? t("new_dish") : t("edit_dish"))}
-    </h2>
-    <div class="field">
-      <label for="dishName">${esc(t("dish_name"))}</label>
-      <input type="text" id="dishName" value="${esc(draft.name)}">
-    </div>
+    ${header({ title: isNew ? t("new_dish") : t("edit_dish") })}
+    <main class="content no-tabs">
+      <div class="field">
+        <label for="dishName">${esc(t("dish_name"))}</label>
+        <input type="text" id="dishName" value="${esc(draft.name)}">
+      </div>
 
-    <p class="section-label">${esc(t("dish_ingredients"))}</p>
-    <div class="scroll-x">
-      <table class="list">
-        <thead><tr>
-          <th>${esc(t("ingredient"))}</th><th class="num">${esc(t("amount"))}</th>
-          <th class="num">${esc(t("cost"))}</th><th></th>
-        </tr></thead>
-        <tbody class="num">${rowsHtml}</tbody>
-      </table>
-    </div>
-    <button class="btn ghost small" id="btnAddRow">${esc(t("add_row"))}</button>
+      <p class="section-label">${esc(t("dish_ingredients"))}</p>
+      ${rowsHtml}
+      <button class="btn ghost small" id="btnAddRow">${esc(t("add_row"))}</button>
 
-    <div class="field" style="margin-top:1.1rem">
-      <label for="dishSell">${esc(t("selling_price"))}</label>
-      <input type="number" id="dishSell" step="0.01" min="0" inputmode="decimal"
-        value="${esc(draft.selling_price)}">
-    </div>
+      <div class="field" style="margin-top:1.1rem">
+        <label for="dishSell">${esc(t("selling_price"))}</label>
+        <input type="number" id="dishSell" step="0.01" min="0" inputmode="decimal"
+          value="${esc(draft.selling_price)}">
+      </div>
 
-    <div class="calc">
-      <div class="caption">${esc(t("cost_per_portion"))}</div>
-      <div class="crow num"><span>${esc(t("total_cost"))}</span><strong id="dishTotal">–</strong></div>
-      <div class="crow num"><span>${esc(t("gross_profit"))}</span><strong id="gpAbs">–</strong></div>
-      <div class="crow num"><span>${esc(t("margin"))}</span><strong id="gpPct">–</strong></div>
-    </div>
+      <div class="calc">
+        <div class="caption">${esc(t("cost_per_portion"))}</div>
+        <div class="crow num"><span>${esc(t("total_cost"))}</span><strong id="dishTotal">–</strong></div>
+        <div class="crow num"><span>${esc(t("gross_profit"))}</span><strong id="gpAbs">–</strong></div>
+        <div class="crow num"><span>${esc(t("margin"))}</span><strong id="gpPct">–</strong></div>
+      </div>
 
-    <button class="btn" id="btnSave">${esc(t("save"))}</button>
-    ${isNew ? "" : `<button class="btn danger-link" id="btnDelete">${esc(t("delete_dish"))}</button>
-    <p class="meta-line num">${esc(dish.updated_by || "")} · ${dateShort(dish.updated_at)}</p>`}`;
+      <button class="btn" id="btnSave">${esc(t("save"))}</button>
+      ${isNew ? "" : `<button class="btn danger-link" id="btnDelete">${esc(t("delete_dish"))}</button>
+      <p class="meta-line num">${esc(dish.updated_by || "")} · ${dateShort(dish.updated_at)}</p>`}
+    </main>`;
 
-  wireTopbar();
+  wireHeader();
 
   const captureDraft = () => {
     draft.name = document.getElementById("dishName").value;
@@ -724,12 +1064,12 @@ function renderDish(id, existingDraft) {
 
   const updateTotals = () => {
     draft.rows.forEach((r, idx) => {
-      const s = r.ingredient_id && ingredientStats(findIngredient(r.ingredient_id));
+      const per = r.id ? rowUnitCost(r) : null;
       const amount = Number(r.grams);
-      const cell = document.getElementById(`rowCost${idx}`);
-      if (cell) cell.textContent = s && amount > 0 ? money(amount * s.perSmall) : "–";
+      const cell = document.getElementById(`dCost${idx}`);
+      if (cell) cell.textContent = per != null && amount > 0 ? money(amount * per) : "–";
     });
-    const c = dishCost(draft.rows);
+    const c = dishCost(draft.rows.filter((r) => r.id || r.grams !== ""));
     document.getElementById("dishTotal").textContent = money(c.total);
     const sell = Number(document.getElementById("dishSell").value);
     const gpAbs = document.getElementById("gpAbs");
@@ -748,29 +1088,31 @@ function renderDish(id, existingDraft) {
     }
   };
 
-  $app.querySelectorAll("[data-row-ing]").forEach((sel) => {
-    sel.onchange = () => {
-      const idx = Number(sel.dataset.rowIng);
-      draft.rows[idx].ingredient_id = sel.value;
-      const ing = findIngredient(sel.value);
-      document.getElementById(`dSfx${idx}`).textContent = ing ? unitOf(ing).small : t("u_g");
-      updateTotals();
+  $app.querySelectorAll("[data-d-pick]").forEach((btn) => {
+    btn.onclick = () => {
+      const idx = Number(btn.dataset.dPick);
+      openPicker(ingredientPickerGroups({ includeSauceRecipes: !state.saucesMissing }), (item) => {
+        captureDraft();
+        draft.rows[idx].kind = item.kind;
+        draft.rows[idx].id = item.id;
+        renderDish(id, { ...draft });
+      });
     };
   });
-  $app.querySelectorAll("[data-row-g]").forEach((inp) => {
-    inp.oninput = () => { draft.rows[Number(inp.dataset.rowG)].grams = inp.value; updateTotals(); };
+  $app.querySelectorAll("[data-d-g]").forEach((inp) => {
+    inp.oninput = () => { draft.rows[Number(inp.dataset.dG)].grams = inp.value; updateTotals(); };
   });
-  $app.querySelectorAll("[data-row-del]").forEach((b) => {
+  $app.querySelectorAll("[data-d-del]").forEach((b) => {
     b.onclick = () => {
       captureDraft();
-      draft.rows.splice(Number(b.dataset.rowDel), 1);
-      if (!draft.rows.length) draft.rows.push({ ingredient_id: "", grams: "" });
+      draft.rows.splice(Number(b.dataset.dDel), 1);
+      if (!draft.rows.length) draft.rows.push({ kind: "ing", id: "", grams: "" });
       renderDish(id, { ...draft });
     };
   });
   document.getElementById("btnAddRow").onclick = () => {
     captureDraft();
-    draft.rows.push({ ingredient_id: "", grams: "" });
+    draft.rows.push({ kind: "ing", id: "", grams: "" });
     renderDish(id, { ...draft });
   };
   document.getElementById("dishSell").oninput = updateTotals;
@@ -781,8 +1123,12 @@ function renderDish(id, existingDraft) {
     if (!name) return alert(t("need_name"));
     // A dish may be saved without a recipe yet (e.g. imported from the menu).
     const rows = draft.rows
-      .filter((r) => r.ingredient_id && Number(r.grams) > 0)
-      .map((r) => ({ ingredient_id: r.ingredient_id, grams: Number(r.grams) }));
+      .filter((r) => r.id && Number(r.grams) > 0)
+      .map((r) => ({
+        ingredient_id: r.kind === "ing" ? r.id : null,
+        sauce_id: r.kind === "sauce" ? r.id : null,
+        grams: Number(r.grams),
+      }));
     const sellRaw = draft.selling_price.trim();
     const selling_price = sellRaw === "" ? null : Number(sellRaw);
 
