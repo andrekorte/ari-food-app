@@ -53,6 +53,17 @@ Only accounts you create should be able to log in.
 Open that link on a phone, log in, and start entering ingredients.
 Tip: in the phone browser choose "Add to Home Screen" to get an app icon.
 
+## Optional: starter data and roles
+
+- **Menu starter data:** run `supabase/seed-ingredients.sql` and
+  `supabase/seed-menu-dishes.sql` in the SQL editor to pre-fill the
+  ingredient list and the dish list (with selling prices) from the
+  restaurant menu. Ingredients start without prices — record each one's
+  first real purchase in the app.
+- **Roles:** by default every account has full access. To limit an
+  account to recording shopping baskets only, see the example at the
+  bottom of `supabase/migration-2026-07-28-roles.sql`.
+
 ## Everyday use — nothing to maintain
 
 - All data is stored in Supabase; everyone who logs in sees the same live data.
