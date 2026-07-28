@@ -294,12 +294,24 @@ details.group[open] summary .chev { transform: rotate(90deg); }
   padding: 0.55rem 0.25rem;
 }
 .picker .pgroup {
-  margin: 1rem 0.9rem 0; max-width: 640px;
+  margin: 0.7rem 0.9rem 0; max-width: 640px;
 }
-.picker .pgtitle {
-  font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--muted); font-weight: 700; margin: 0 0.25rem 0.4rem;
+.picker .pgsummary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.5rem; padding: 0.8rem 1.05rem; min-height: 54px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 15px;
+  box-shadow: var(--shadow);
+  font-weight: 700; font-size: 1.02rem;
+  -webkit-user-select: none; user-select: none;
 }
+.picker .pgsummary::-webkit-details-marker { display: none; }
+.picker .pgsummary:active { background: var(--field); }
+.picker .pgsummary .gright { display: inline-flex; align-items: center; gap: 0.55rem; }
+.picker .pgsummary .chev { transition: transform 150ms ease; color: var(--muted); font-size: 1.15rem; }
+.picker details[open] .pgsummary { border-radius: 15px 15px 0 0; }
+.picker details[open] .pgsummary .chev { transform: rotate(90deg); }
+.picker details[open] .pgbody { border-radius: 0 0 15px 15px; border-top: none; }
 .picker .pgbody {
   background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
   overflow: hidden; box-shadow: var(--shadow);

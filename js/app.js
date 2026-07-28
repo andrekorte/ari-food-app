@@ -21,6 +21,8 @@ const state = {
   saucesMissing: false, // categories/sauces migration not run yet
   profile: null,        // this user's row in profiles (null = full access)
   view: { name: "home" },
+  // Remembered navigation state so Back returns exactly where you were.
+  ui: { openIng: new Set(), openDish: new Set(), homeScroll: 0 },
 };
 let draft = null;
 
@@ -63,6 +65,17 @@ function unitOf(ing) {
 
 function catOf(ing) {
   return CATS.includes(ing.category) ? ing.category : "other";
+}
+
+// Display name: Thai name in Thai mode when one exists, else English.
+function dName(x) {
+  if (!x) return "";
+  return LANG === "th" && x.name_th ? x.name_th : x.name;
+}
+
+// True once the Thai-names migration has run.
+function hasNameTh() {
+  return !state.ingredients.length || "name_th" in state.ingredients[0];
 }
 
 function dishCatOf(d) {
@@ -198,10 +211,13 @@ async function loadData() {
 /* ---------- navigation & chrome ---------- */
 
 async function go(view) {
+  if (state.view.name === "home" && view.name !== "home") {
+    state.ui.homeScroll = window.scrollY;
+  }
   state.view = view;
   draft = null;
   await render();
-  window.scrollTo(0, 0);
+  window.scrollTo(0, view.name === "home" ? state.ui.homeScroll : 0);
 }
 
 async function render() {
@@ -233,7 +249,7 @@ function header({ home, title } = {}) {
     <span class="brandwrap">
       ${home
         ? `${LOGO}<span class="brand">${APP_NAME}</span>`
-        : `<button class="back" id="btnBack">‹ ${esc(t("home"))}</button>
+        : `<button class="back" id="btnBack">‹ ${esc(t("back"))}</button>
            <span class="htitle">${esc(title || "")}</span>`}
     </span>
     <span class="actions">
@@ -322,7 +338,7 @@ function ingRowHtml(ing) {
     : `<span class="muted">${esc(t("no_price_yet"))}</span>`;
   return `<div class="lrow">
     <button class="lmain" ${isAdmin() ? `data-edit-ing="${ing.id}"` : "disabled"}>
-      <span class="lname">${esc(ing.name)}</span>
+      <span class="lname">${esc(dName(ing))}</span>
       <span class="lmeta num">${meta}</span>
       ${isAdmin() ? `<span class="chev">›</span>` : ""}
     </button>
@@ -335,7 +351,7 @@ function renderHome() {
 
   const catSections = CATS.map((cat) => {
     const items = state.ingredients.filter((i) => catOf(i) === cat);
-    return `<details class="group">
+    return `<details class="group" data-ing-cat="${cat}" ${state.ui.openIng.has(cat) ? "open" : ""}>
       <summary>
         <span>${esc(t("cat_" + cat))}</span>
         <span class="gright"><span class="badge num">${items.length}</span><span class="chev">›</span></span>
@@ -351,7 +367,7 @@ function renderHome() {
       : `<span class="muted">${esc(t("no_price_yet"))}</span>`;
     return `<div class="lrow">
       <button class="lmain" data-edit-sauce="${s.id}">
-        <span class="lname">${esc(s.name)}</span>
+        <span class="lname">${esc(dName(s))}</span>
         <span class="lmeta num">${meta}</span>
         <span class="chev">›</span>
       </button>
@@ -369,7 +385,7 @@ function renderHome() {
     ].filter(Boolean).join(" · ");
     return `<div class="lrow">
       <button class="lmain" data-edit-dish="${d.id}">
-        <span class="lname">${esc(d.name)}</span>
+        <span class="lname">${esc(dName(d))}</span>
         <span class="lmeta num">${meta}</span>
         <span class="chev">›</span>
       </button>
@@ -381,7 +397,7 @@ function renderHome() {
     ? DISH_CATS.map((cat) => {
         const items = state.dishes.filter((d) => dishCatOf(d) === cat);
         if (!items.length) return "";
-        return `<details class="group">
+        return `<details class="group" data-dish-cat="${cat}" ${state.ui.openDish.has(cat) ? "open" : ""}>
           <summary>
             <span>${esc(t("dcat_" + cat))}</span>
             <span class="gright"><span class="badge num">${items.length}</span><span class="chev">›</span></span>
@@ -427,6 +443,21 @@ function renderHome() {
 
   wireHeader();
   wireTabbar();
+
+  // Remember which sections are open across navigation.
+  $app.querySelectorAll("details[data-ing-cat]").forEach((d) => {
+    d.addEventListener("toggle", () => {
+      if (d.open) state.ui.openIng.add(d.dataset.ingCat);
+      else state.ui.openIng.delete(d.dataset.ingCat);
+    });
+  });
+  $app.querySelectorAll("details[data-dish-cat]").forEach((d) => {
+    d.addEventListener("toggle", () => {
+      if (d.open) state.ui.openDish.add(d.dataset.dishCat);
+      else state.ui.openDish.delete(d.dataset.dishCat);
+    });
+  });
+
   const addIng = document.getElementById("btnAddIng");
   if (addIng) addIng.onclick = () => go({ name: "ingredient", id: null });
   const addSauce = document.getElementById("btnAddSauce");
@@ -463,19 +494,23 @@ function renderHome() {
 function openPicker(groups, onPick) {
   const overlay = document.createElement("div");
   overlay.className = "picker";
+  // Categories start collapsed (the list is long); searching expands them.
   const groupHtml = () => groups.map((g, gi) => {
     const q = overlay.querySelector("input") ? overlay.querySelector("input").value.trim().toLowerCase() : "";
     const items = g.items.filter((it) => !q || it.label.toLowerCase().includes(q));
     if (!items.length) return "";
-    return `<div class="pgroup">
-      <p class="pgtitle">${esc(g.title)}</p>
+    return `<details class="pgroup" ${q ? "open" : ""}>
+      <summary class="pgsummary">
+        <span>${esc(g.title)}</span>
+        <span class="gright"><span class="badge num">${items.length}</span><span class="chev">›</span></span>
+      </summary>
       <div class="pgbody">
         ${items.map((it) => `<button class="prow" data-g="${gi}" data-id="${it.id}" data-kind="${it.kind}">
           <span class="pname">${esc(it.label)}</span>
           <span class="psub num">${it.sub || ""}</span>
         </button>`).join("")}
       </div>
-    </div>`;
+    </details>`;
   }).join("");
 
   overlay.innerHTML = `
@@ -510,7 +545,7 @@ function ingPickItem(ing) {
   const s = ingredientStats(ing);
   const u = unitOf(ing);
   return {
-    kind: "ing", id: ing.id, label: ing.name,
+    kind: "ing", id: ing.id, label: dName(ing),
     sub: s ? `${money(s.perBig)}/${u.big}` : esc(t("no_price_yet")),
   };
 }
@@ -531,7 +566,7 @@ function ingredientPickerGroups({ cats = CATS, includeSauceRecipes = false } = {
         ...state.sauces.map((s) => {
           const st = sauceStats(s);
           return {
-            kind: "sauce", id: s.id, label: `🥣 ${s.name}`,
+            kind: "sauce", id: s.id, label: `🥣 ${dName(s)}`,
             sub: st ? `${money(st.perG, 3)}/${t("u_g")}` : esc(t("no_price_yet")),
           };
         }),
@@ -552,10 +587,10 @@ function pickedLabel(row) {
   if (!row.id) return null;
   if (row.kind === "sauce") {
     const s = findSauce(row.id);
-    return s ? `🥣 ${s.name}` : null;
+    return s ? `🥣 ${dName(s)}` : null;
   }
   const i = findIngredient(row.id);
-  return i ? i.name : null;
+  return i ? dName(i) : null;
 }
 
 function rowSuffix(row) {
@@ -571,7 +606,7 @@ function renderBasket(existingDraft) {
 
   const rowsHtml = draft.rows.map((r, idx) => {
     const ing = findIngredient(r.id);
-    const label = ing ? ing.name : null;
+    const label = ing ? dName(ing) : null;
     const suffix = ing ? unitOf(ing).big : t("u_kg");
     return `<div class="erow">
       <button class="pickbtn ${label ? "" : "placeholder"}" data-b-pick="${idx}">
@@ -683,6 +718,7 @@ function renderIngredient(id, existingDraft) {
 
   draft = existingDraft || {
     name: ing ? ing.name : "",
+    name_th: ing ? ing.name_th || "" : "",
     unit: ing ? ing.unit || "kg" : "kg",
     category: ing ? catOf(ing) : "other",
     pQty: latest ? fmtQty(latest.purchased_kg) : "",
@@ -714,6 +750,10 @@ function renderIngredient(id, existingDraft) {
         <label for="ingName">${esc(t("ingredient_name"))}</label>
         <input type="text" id="ingName" value="${esc(draft.name)}">
       </div>
+      ${hasNameTh() ? `<div class="field">
+        <label for="ingNameTh">${esc(t("name_th"))}</label>
+        <input type="text" id="ingNameTh" value="${esc(draft.name_th)}">
+      </div>` : ""}
       <div class="row2">
         <div class="field">
           <label for="ingCat">${esc(t("category"))}</label>
@@ -776,6 +816,8 @@ function renderIngredient(id, existingDraft) {
   const inputs = ["pQty", "pPrice", "pAfter"].map((i) => document.getElementById(i));
   const captureDraft = () => {
     draft.name = document.getElementById("ingName").value;
+    const th = document.getElementById("ingNameTh");
+    if (th) draft.name_th = th.value;
     draft.category = document.getElementById("ingCat").value;
     draft.unit = document.getElementById("ingUnit").value;
     draft.pQty = inputs[0].value;
@@ -830,6 +872,7 @@ function renderIngredient(id, existingDraft) {
     try {
       let ingredientId = id;
       const fields = { name, unit: draft.unit, category: draft.category, updated_by: userName() };
+      if (hasNameTh()) fields.name_th = draft.name_th.trim() || null;
       if (isNew) {
         const { data, error } = await db.from("ingredients").insert(fields).select().single();
         if (error) throw error;
@@ -884,6 +927,7 @@ function renderSauce(id, existingDraft) {
   const isNew = !sauce;
   draft = existingDraft || {
     name: sauce ? sauce.name : "",
+    name_th: sauce ? sauce.name_th || "" : "",
     rows: sauce && (sauce.sauce_ingredients || []).length
       ? sauce.sauce_ingredients.map((r) => ({ id: r.ingredient_id, grams: String(r.grams) }))
       : [{ id: "", grams: "" }],
@@ -891,7 +935,7 @@ function renderSauce(id, existingDraft) {
 
   const rowsHtml = draft.rows.map((r, idx) => {
     const ing = findIngredient(r.id);
-    const label = ing ? ing.name : null;
+    const label = ing ? dName(ing) : null;
     const suffix = ing ? unitOf(ing).small : t("u_g");
     return `<div class="erow">
       <button class="pickbtn ${label ? "" : "placeholder"}" data-s-pick="${idx}">
@@ -912,6 +956,10 @@ function renderSauce(id, existingDraft) {
         <label for="sauceName">${esc(t("sauce_name"))}</label>
         <input type="text" id="sauceName" value="${esc(draft.name)}">
       </div>
+      ${hasNameTh() ? `<div class="field">
+        <label for="sauceNameTh">${esc(t("name_th"))}</label>
+        <input type="text" id="sauceNameTh" value="${esc(draft.name_th)}">
+      </div>` : ""}
 
       <p class="section-label">${esc(t("cat_sauce"))}</p>
       ${rowsHtml}
@@ -933,6 +981,8 @@ function renderSauce(id, existingDraft) {
 
   const captureDraft = () => {
     draft.name = document.getElementById("sauceName").value;
+    const th = document.getElementById("sauceNameTh");
+    if (th) draft.name_th = th.value;
   };
 
   const updateTotals = () => {
@@ -990,6 +1040,7 @@ function renderSauce(id, existingDraft) {
     try {
       let sauceId = id;
       const fields = { name, updated_at: new Date().toISOString(), updated_by: userName() };
+      if (hasNameTh()) fields.name_th = draft.name_th.trim() || null;
       if (isNew) {
         const { data, error } = await db.from("sauces").insert(fields).select().single();
         if (error) throw error;
@@ -1034,6 +1085,7 @@ function renderDish(id, existingDraft) {
   const isNew = !dish;
   draft = existingDraft || {
     name: dish ? dish.name : "",
+    name_th: dish ? dish.name_th || "" : "",
     category: dish ? dishCatOf(dish) : "other",
     selling_price: dish && dish.selling_price != null ? String(dish.selling_price) : "",
     rows: dish && (dish.dish_ingredients || []).length
@@ -1062,6 +1114,10 @@ function renderDish(id, existingDraft) {
         <label for="dishName">${esc(t("dish_name"))}</label>
         <input type="text" id="dishName" value="${esc(draft.name)}">
       </div>
+      ${hasNameTh() ? `<div class="field">
+        <label for="dishNameTh">${esc(t("name_th"))}</label>
+        <input type="text" id="dishNameTh" value="${esc(draft.name_th)}">
+      </div>` : ""}
       ${hasDishCat() ? `<div class="field">
         <label for="dishCat">${esc(t("category"))}</label>
         <select id="dishCat">
@@ -1095,6 +1151,8 @@ function renderDish(id, existingDraft) {
 
   const captureDraft = () => {
     draft.name = document.getElementById("dishName").value;
+    const th = document.getElementById("dishNameTh");
+    if (th) draft.name_th = th.value;
     draft.selling_price = document.getElementById("dishSell").value;
     const cat = document.getElementById("dishCat");
     if (cat) draft.category = cat.value;
@@ -1177,6 +1235,7 @@ function renderDish(id, existingDraft) {
         updated_at: new Date().toISOString(), updated_by: userName(),
       };
       if (hasDishCat()) fields.category = draft.category;
+      if (hasNameTh()) fields.name_th = draft.name_th.trim() || null;
       if (isNew) {
         const { data, error } = await db.from("dishes").insert(fields).select().single();
         if (error) throw error;

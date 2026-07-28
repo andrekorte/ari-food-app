@@ -6,6 +6,7 @@
 create table public.ingredients (
   id uuid primary key default gen_random_uuid(),
   name text not null,
+  name_th text,
   unit text not null default 'kg' check (unit in ('kg', 'l')),
   category text not null default 'other'
     check (category in ('meat', 'veg', 'sauce', 'other')),
@@ -33,6 +34,7 @@ create table public.purchases (
 create table public.dishes (
   id uuid primary key default gen_random_uuid(),
   name text not null,
+  name_th text,
   category text not null default 'other'
     check (category in (
       'ala_carte', 'noodle_soup', 'entree', 'vegan', 'gluten_free',
@@ -49,6 +51,7 @@ create table public.dishes (
 create table public.sauces (
   id uuid primary key default gen_random_uuid(),
   name text not null,
+  name_th text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   updated_by text
