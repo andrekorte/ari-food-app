@@ -29,9 +29,15 @@ create table public.purchases (
   check (wastage_kg < purchased_kg)
 );
 
+-- category values mirror the menu sections on ari-thaistreetfood.com.
 create table public.dishes (
   id uuid primary key default gen_random_uuid(),
   name text not null,
+  category text not null default 'other'
+    check (category in (
+      'ala_carte', 'noodle_soup', 'entree', 'vegan', 'gluten_free',
+      'drinks', 'dessert', 'snacks', 'special', 'other'
+    )),
   selling_price numeric check (selling_price >= 0),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),

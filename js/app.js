@@ -28,6 +28,11 @@ const $app = document.getElementById("app");
 const LOGO = `<img src="assets/ari-logo.png" alt="" class="brand-logo">`;
 const APP_NAME = "Food tracker";
 const CATS = ["meat", "veg", "sauce", "other"];
+// Menu sections from ari-thaistreetfood.com.
+const DISH_CATS = [
+  "ala_carte", "noodle_soup", "entree", "vegan", "gluten_free",
+  "drinks", "dessert", "snacks", "special", "other",
+];
 
 /* ---------- helpers ---------- */
 
@@ -58,6 +63,15 @@ function unitOf(ing) {
 
 function catOf(ing) {
   return CATS.includes(ing.category) ? ing.category : "other";
+}
+
+function dishCatOf(d) {
+  return DISH_CATS.includes(d.category) ? d.category : "other";
+}
+
+// True once the dish-categories migration has run.
+function hasDishCat() {
+  return !state.dishes.length || "category" in state.dishes[0];
 }
 
 function dateShort(iso) {
@@ -344,7 +358,7 @@ function renderHome() {
     </div>`;
   }).join("");
 
-  const dishRows = state.dishes.map((d) => {
+  const dishRowHtml = (d) => {
     const rows = dishRowsOf(d);
     const c = dishCost(rows);
     const sell = d.selling_price != null ? Number(d.selling_price) : null;
@@ -360,7 +374,22 @@ function renderHome() {
         <span class="chev">›</span>
       </button>
     </div>`;
-  }).join("");
+  };
+
+  // Grouped by menu section once the migration has run; flat list before.
+  const dishSections = hasDishCat()
+    ? DISH_CATS.map((cat) => {
+        const items = state.dishes.filter((d) => dishCatOf(d) === cat);
+        if (!items.length) return "";
+        return `<details class="group">
+          <summary>
+            <span>${esc(t("dcat_" + cat))}</span>
+            <span class="gright"><span class="badge num">${items.length}</span><span class="chev">›</span></span>
+          </summary>
+          ${items.map(dishRowHtml).join("")}
+        </details>`;
+      }).join("")
+    : state.dishes.map(dishRowHtml).join("");
 
   $app.innerHTML = `
     ${header({ home: true })}
@@ -390,7 +419,7 @@ function renderHome() {
           <span class="card-title">${esc(t("dishes"))}</span>
           <span class="count num">${state.dishes.length} ${esc(t("items"))}</span>
         </div>
-        ${state.dishes.length ? dishRows : `<p class="empty">${esc(t("no_dishes"))}</p>`}
+        ${state.dishes.length ? dishSections : `<p class="empty">${esc(t("no_dishes"))}</p>`}
         <div class="card-foot"><button class="btn ghost small" id="btnAddDish">${esc(t("add_dish"))}</button></div>
       </div>` : ""}
     </main>
@@ -1005,6 +1034,7 @@ function renderDish(id, existingDraft) {
   const isNew = !dish;
   draft = existingDraft || {
     name: dish ? dish.name : "",
+    category: dish ? dishCatOf(dish) : "other",
     selling_price: dish && dish.selling_price != null ? String(dish.selling_price) : "",
     rows: dish && (dish.dish_ingredients || []).length
       ? dishRowsOf(dish).map((r) => ({ ...r, grams: String(r.grams) }))
@@ -1032,6 +1062,12 @@ function renderDish(id, existingDraft) {
         <label for="dishName">${esc(t("dish_name"))}</label>
         <input type="text" id="dishName" value="${esc(draft.name)}">
       </div>
+      ${hasDishCat() ? `<div class="field">
+        <label for="dishCat">${esc(t("category"))}</label>
+        <select id="dishCat">
+          ${DISH_CATS.map((c) => `<option value="${c}" ${draft.category === c ? "selected" : ""}>${esc(t("dcat_" + c))}</option>`).join("")}
+        </select>
+      </div>` : ""}
 
       <p class="section-label">${esc(t("dish_ingredients"))}</p>
       ${rowsHtml}
@@ -1060,6 +1096,8 @@ function renderDish(id, existingDraft) {
   const captureDraft = () => {
     draft.name = document.getElementById("dishName").value;
     draft.selling_price = document.getElementById("dishSell").value;
+    const cat = document.getElementById("dishCat");
+    if (cat) draft.category = cat.value;
   };
 
   const updateTotals = () => {
@@ -1138,6 +1176,7 @@ function renderDish(id, existingDraft) {
         name, selling_price,
         updated_at: new Date().toISOString(), updated_by: userName(),
       };
+      if (hasDishCat()) fields.category = draft.category;
       if (isNew) {
         const { data, error } = await db.from("dishes").insert(fields).select().single();
         if (error) throw error;
