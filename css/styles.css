@@ -415,3 +415,15 @@ h2.ptitle { margin: 0.2rem 0 1rem; font-size: 1.35rem; }
   min-height: 44px; padding: 0.45rem 0.5rem; text-align: right;
   font-size: 0.95rem; border-radius: 10px; box-shadow: none;
 }
+
+/* ---- Receipt-text hint in the picker ---- */
+.scanhint {
+  margin: 0.9rem 0.9rem 0; padding: 0.65rem 0.9rem;
+  background: var(--yellow-soft); border: 1.5px solid var(--yellow);
+  border-radius: 13px; font-size: 0.95rem;
+}
+.scanhint .shlabel {
+  display: block; font-size: 0.66rem; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--amber-text); font-weight: 700;
+  margin-bottom: 0.1rem;
+}

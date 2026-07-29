@@ -548,8 +548,10 @@ function renderHome() {
 
 /* ---------- full-screen searchable picker ---------- */
 
-// groups: [{title, items: [{kind, id, label, sub}]}]; onPick(item)
-function openPicker(groups, onPick) {
+// groups: [{title, items: [{kind, id, label, sub}], open}]; onPick(item)
+// opts.hint shows the recognised receipt text above the list so the user
+// can compare it against the choices.
+function openPicker(groups, onPick, opts = {}) {
   const overlay = document.createElement("div");
   overlay.className = "picker";
   // Categories start collapsed (the list is long); searching expands them.
@@ -557,7 +559,7 @@ function openPicker(groups, onPick) {
     const q = overlay.querySelector("input") ? overlay.querySelector("input").value.trim().toLowerCase() : "";
     const items = g.items.filter((it) => !q || it.label.toLowerCase().includes(q));
     if (!items.length) return "";
-    return `<details class="pgroup" ${q ? "open" : ""}>
+    return `<details class="pgroup" ${q || g.open ? "open" : ""}>
       <summary class="pgsummary">
         <span>${esc(g.title)}</span>
         <span class="gright"><span class="badge num">${items.length}</span><span class="chev">›</span></span>
@@ -576,6 +578,7 @@ function openPicker(groups, onPick) {
       <input type="search" placeholder="${esc(t("search"))}" aria-label="${esc(t("search"))}">
       <button class="pcancel">${esc(t("cancel"))}</button>
     </div>
+    ${opts.hint ? `<div class="scanhint"><span class="shlabel">${esc(t("receipt_text"))}</span>“${esc(opts.hint)}”</div>` : ""}
     <div class="pbody">${""}</div>`;
   document.body.appendChild(overlay);
   document.body.style.overflow = "hidden";
@@ -695,12 +698,15 @@ function normTxt(x) {
     .replace(/\s+/g, " ").trim();
 }
 
-// Fuzzy-match a receipt line to an ingredient by English or Thai name.
-function matchIngredient(name) {
+// Score every ingredient against a receipt line (English or Thai name),
+// best first. Used both for auto-matching and for "best matches" in the
+// picker when the user resolves an uncertain line.
+function scoreCandidates(name) {
   const n = normTxt(name);
-  if (!n) return null;
-  let best = null, bestScore = 0;
+  if (!n) return [];
+  const scored = [];
   for (const ing of state.ingredients) {
+    let best = 0;
     for (const cand of [ing.name, ing.name_th]) {
       if (!cand) continue;
       const c = normTxt(cand);
@@ -713,10 +719,16 @@ function matchIngredient(name) {
         const overlap = nt.filter((w) => ct.has(w)).length;
         score = nt.length ? (overlap / Math.max(nt.length, ct.size)) : 0;
       }
-      if (score > bestScore) { bestScore = score; best = ing; }
+      if (score > best) best = score;
     }
+    if (best > 0.15) scored.push({ ing, score: best });
   }
-  return bestScore >= 0.45 ? best : null;
+  return scored.sort((a, b) => b.score - a.score);
+}
+
+function matchIngredient(name) {
+  const top = scoreCandidates(name)[0];
+  return top && top.score >= 0.45 ? top.ing : null;
 }
 
 function scanItemToRow(item) {
@@ -790,11 +802,20 @@ function renderBasket(existingDraft) {
   $app.querySelectorAll("[data-b-pick]").forEach((btn) => {
     btn.onclick = () => {
       const idx = Number(btn.dataset.bPick);
-      openPicker(ingredientPickerGroups(), (item) => {
+      const row = draft.rows[idx];
+      const groups = ingredientPickerGroups();
+      let opts = {};
+      if (row.scanLabel) {
+        const sugg = scoreCandidates(row.scanLabel).slice(0, 5)
+          .map((x) => ingPickItem(x.ing));
+        if (sugg.length) groups.unshift({ title: t("best_matches"), items: sugg, open: true });
+        opts = { hint: row.scanLabel };
+      }
+      openPicker(groups, (item) => {
         captureDraft();
         draft.rows[idx].id = item.id;
         renderBasket({ ...draft });
-      });
+      }, opts);
     };
   });
   $app.querySelectorAll("[data-b-qty]").forEach((inp) => {
