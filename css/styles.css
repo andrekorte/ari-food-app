@@ -427,3 +427,22 @@ h2.ptitle { margin: 0.2rem 0 1rem; font-size: 1.35rem; }
   letter-spacing: 0.06em; color: var(--amber-text); font-weight: 700;
   margin-bottom: 0.1rem;
 }
+
+/* ---- Site selector (segmented) ---- */
+.seg { display: flex; gap: 0.5rem; }
+.segbtn {
+  flex: 1; background: var(--panel); border: 1.5px solid var(--line);
+  border-radius: 13px; padding: 0.65rem 0.4rem; min-height: 50px;
+  font: inherit; font-size: 1rem; font-weight: 700; color: var(--ink);
+  cursor: pointer; box-shadow: var(--shadow);
+}
+.segbtn.active {
+  background: var(--red); border-color: var(--red); color: #ffffff;
+  box-shadow: 0 3px 12px rgba(234, 28, 36, 0.28);
+}
+
+/* ---- Auto-matched scan rows (verify me) ---- */
+.pickbtn.automatched { border-color: var(--yellow); background: var(--yellow-soft); }
+
+/* ---- Create-new-ingredient form in the picker ---- */
+.pcreatewrap { padding-bottom: 1.2rem; }

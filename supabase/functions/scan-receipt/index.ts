@@ -1,7 +1,8 @@
 // Supabase Edge Function: scan-receipt
 // Receives a base64 photo of a receipt/invoice from the app, sends it to
 // an AI vision model (OpenAI by default, Anthropic if only that key is
-// set), and returns structured line items for the purchase basket.
+// set), and returns structured line items for the purchase basket, plus
+// a site hint read from the invoice's customer/delivery details.
 //
 // Secrets (Edge Functions → Secrets):
 //   OPENAI_API_KEY     — your OpenAI API key  (or ANTHROPIC_API_KEY)
@@ -14,13 +15,15 @@ const cors = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const PROMPT = `You are reading a photo of a shopping receipt or supplier invoice for a Thai restaurant in Australia. Extract every purchased food or kitchen item. Return ONLY a JSON object shaped exactly like:
-{"items":[{"name":"...","quantity":1.5,"unit":"kg","price":12.5}]}
+const PROMPT = `You are reading a photo of a shopping receipt or a wholesale supplier tax invoice for a Thai restaurant in Australia. Return ONLY a JSON object shaped exactly like:
+{"site_hint":"Yindee Thai","items":[{"name":"CHICKEN BREAST FILLET SLICED","quantity":32.6,"unit":"kg","price":277.10}]}
 Rules:
-- name: the item text as printed (keep Thai text as-is).
-- quantity and unit: the amount bought. Prefer weight/volume ("kg","g","l","ml"); use "each" for counted items; if unknown use 0 and "each".
-- price: the line total price as a number.
-- Skip non-food lines: totals, GST/tax, bags, deposits, discounts, card fees.`;
+- name: the COMPLETE item description exactly as printed (e.g. "CHICKEN BREAST FILLET SLICED", never shortened to "Chicken"). Do not summarise, merge or translate names; keep Thai text as-is. Ignore product codes.
+- Wholesale invoices often have columns like Quantity (number of packs), Weight, Price (per-kg rate) and Amount (line total). In that case: quantity = the WEIGHT value, unit = "kg", price = the LINE TOTAL from the Amount column — NOT the per-kg rate. Sanity check: weight × rate should roughly equal the amount you output.
+- Simple shop receipts: quantity + unit = the amount bought (prefer "kg","g","l","ml"; use "each" for counted items, 0 if unknown), price = the line total.
+- price: a plain number.
+- site_hint: any customer / "Invoice To" / "Deliver To" name or address text on the document (e.g. "Yindee Thai"); null if none shown.
+- Skip non-food lines: totals, GST/tax, bags, deposits, discounts, card fees, delivery fees.`;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -90,7 +93,10 @@ Deno.serve(async (req) => {
       const m = text.match(/\{[\s\S]*\}/);
       parsed = m ? JSON.parse(m[0]) : { items: [] };
     }
-    return json({ items: Array.isArray(parsed.items) ? parsed.items : [] });
+    return json({
+      items: Array.isArray(parsed.items) ? parsed.items : [],
+      site_hint: typeof parsed.site_hint === "string" ? parsed.site_hint : null,
+    });
   } catch (e) {
     return json({ error: String(e) }, 500);
   }

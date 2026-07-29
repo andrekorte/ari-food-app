@@ -579,7 +579,27 @@ function openPicker(groups, onPick, opts = {}) {
       <button class="pcancel">${esc(t("cancel"))}</button>
     </div>
     ${opts.hint ? `<div class="scanhint"><span class="shlabel">${esc(t("receipt_text"))}</span>“${esc(opts.hint)}”</div>` : ""}
-    <div class="pbody">${""}</div>`;
+    <div class="pbody">${""}</div>
+    ${opts.allowCreate && isAdmin() ? `<div class="pgroup pcreatewrap">
+      <button class="btn ghost small" id="pcToggle">＋ ${esc(t("new_ingredient"))}</button>
+      <div id="pcForm" style="display:none">
+        <div class="field" style="margin-top:0.8rem">
+          <label for="pcName">${esc(t("ingredient_name"))}</label>
+          <input type="text" id="pcName" value="${esc(opts.createDefault || "")}">
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label for="pcCat">${esc(t("category"))}</label>
+            <select id="pcCat">${CATS.map((c) => `<option value="${c}">${esc(t("cat_" + c))}</option>`).join("")}</select>
+          </div>
+          <div class="field">
+            <label for="pcUnit">${esc(t("unit"))}</label>
+            <select id="pcUnit"><option value="kg">${esc(t("unit_kg"))}</option><option value="l">${esc(t("unit_l"))}</option></select>
+          </div>
+        </div>
+        <button class="btn small" id="pcCreate">${esc(t("create"))}</button>
+      </div>
+    </div>` : ""}`;
   document.body.appendChild(overlay);
   document.body.style.overflow = "hidden";
 
@@ -598,6 +618,37 @@ function openPicker(groups, onPick, opts = {}) {
   };
   overlay.querySelector(".pcancel").onclick = close;
   overlay.querySelector("input").oninput = refresh;
+
+  const pcToggle = overlay.querySelector("#pcToggle");
+  if (pcToggle) {
+    pcToggle.onclick = () => {
+      const f = overlay.querySelector("#pcForm");
+      const hidden = f.style.display === "none";
+      f.style.display = hidden ? "" : "none";
+      const nameInput = overlay.querySelector("#pcName");
+      if (hidden && !nameInput.value) {
+        nameInput.value = overlay.querySelector("input[type=search]").value;
+      }
+    };
+    overlay.querySelector("#pcCreate").onclick = async () => {
+      const name = overlay.querySelector("#pcName").value.trim();
+      if (!name) return alert(t("need_name"));
+      const fields = {
+        name,
+        unit: overlay.querySelector("#pcUnit").value,
+        category: overlay.querySelector("#pcCat").value,
+        updated_by: userName(),
+      };
+      const { data, error } = await db.from("ingredients").insert(fields).select().single();
+      if (error) { console.error(error); return alert(t("save_failed")); }
+      data.purchases = [];
+      state.ingredients.push(data);
+      state.ingredients.sort((a, b) => a.name.localeCompare(b.name));
+      close();
+      onPick({ kind: "ing", id: data.id });
+    };
+  }
+
   refresh();
   overlay.querySelector("input").focus();
 }
@@ -689,7 +740,17 @@ async function scanReceipt(file) {
   });
   if (error) throw error;
   if (data && data.error) throw new Error(data.error);
-  return (data && data.items) || [];
+  return { items: (data && data.items) || [], siteHint: data && data.site_hint };
+}
+
+// Detect which site an invoice belongs to from its customer/delivery text.
+function detectSite(hintText) {
+  const h = normTxt(hintText);
+  if (!h) return null;
+  if (h.includes("yindee") || h.includes("yindy")) return "yindee";
+  if (h.includes("sayhi") || h.includes("say hi")) return "sayhi";
+  if (/\bari\b/.test(h)) return "ari";
+  return null;
 }
 
 function normTxt(x) {
@@ -726,9 +787,16 @@ function scoreCandidates(name) {
   return scored.sort((a, b) => b.score - a.score);
 }
 
+// Auto-match only with high confidence AND a clear winner — an ambiguous
+// line (e.g. "Chicken" matching four chicken cuts) stays unresolved so the
+// user picks from the best-matches list instead of a silent wrong guess.
 function matchIngredient(name) {
-  const top = scoreCandidates(name)[0];
-  return top && top.score >= 0.45 ? top.ing : null;
+  const ranked = scoreCandidates(name);
+  if (!ranked.length) return null;
+  const top = ranked[0];
+  if (top.score < 0.6) return null;
+  if (ranked[1] && ranked[1].score >= top.score - 0.1) return null;
+  return top.ing;
 }
 
 function scanItemToRow(item) {
@@ -739,6 +807,7 @@ function scanItemToRow(item) {
   const price = Number(item.price);
   return {
     id: ing ? ing.id : "",
+    auto: !!ing,
     qty: qty > 0 ? String(Number(qty.toFixed(3))) : "",
     price: isFinite(price) && price >= 0 ? String(price) : "",
     scanLabel: String(item.name || ""),
@@ -748,14 +817,17 @@ function scanItemToRow(item) {
 /* ---------- basket: record a whole shopping trip ---------- */
 
 function renderBasket(existingDraft) {
-  draft = existingDraft || { rows: [{ id: "", qty: "", price: "" }] };
+  draft = existingDraft || {
+    site: localStorage.getItem("arifood_site") || "",
+    rows: [{ id: "", qty: "", price: "" }],
+  };
 
   const rowsHtml = draft.rows.map((r, idx) => {
     const ing = findIngredient(r.id);
     const label = ing ? dName(ing) : null;
     const suffix = ing ? unitOf(ing).big : t("u_kg");
     return `<div class="erow">
-      <button class="pickbtn ${label ? "" : "placeholder"}" data-b-pick="${idx}">
+      <button class="pickbtn ${label ? "" : "placeholder"} ${r.auto && r.id ? "automatched" : ""}" data-b-pick="${idx}">
         ${esc(label || (r.scanLabel ? "? " + r.scanLabel : t("choose_item")))}
       </button>
       <input type="number" class="amt" data-b-qty="${idx}" step="0.001" min="0"
@@ -771,6 +843,12 @@ function renderBasket(existingDraft) {
     ${header({ title: t("new_purchase") })}
     <main class="content">
       <p class="muted" style="margin:0.2rem 0 0.8rem; font-size:0.85rem">${esc(t("basket_hint"))}</p>
+      <div class="field">
+        <label>${esc(t("site"))}</label>
+        <div class="seg" id="siteSeg">
+          ${SITES.map((x) => `<button type="button" class="segbtn ${draft.site === x ? "active" : ""}" data-site="${x}">${esc(t("site_" + x))}</button>`).join("")}
+        </div>
+      </div>
       <button class="btn ghost small" id="btnScan"><span class="binline">${ICONS.camera}</span>${esc(t("scan_receipt"))}</button>
       <input type="file" id="scanFile" accept="image/*" capture="environment" style="display:none">
       <div style="height:0.5rem"></div>
@@ -799,6 +877,17 @@ function renderBasket(existingDraft) {
     document.getElementById("basketTotal").textContent = money(total);
   };
 
+  const setSite = (site) => {
+    draft.site = site;
+    localStorage.setItem("arifood_site", site);
+    $app.querySelectorAll("#siteSeg .segbtn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.site === site);
+    });
+  };
+  $app.querySelectorAll("#siteSeg .segbtn").forEach((b) => {
+    b.onclick = () => setSite(b.dataset.site);
+  });
+
   $app.querySelectorAll("[data-b-pick]").forEach((btn) => {
     btn.onclick = () => {
       const idx = Number(btn.dataset.bPick);
@@ -811,9 +900,12 @@ function renderBasket(existingDraft) {
         if (sugg.length) groups.unshift({ title: t("best_matches"), items: sugg, open: true });
         opts = { hint: row.scanLabel };
       }
+      opts.allowCreate = true;
+      opts.createDefault = row.scanLabel || "";
       openPicker(groups, (item) => {
         captureDraft();
         draft.rows[idx].id = item.id;
+        draft.rows[idx].auto = false;
         renderBasket({ ...draft });
       }, opts);
     };
@@ -847,13 +939,15 @@ function renderBasket(existingDraft) {
     btn.textContent = t("scanning");
     captureDraft();
     try {
-      const items = await scanReceipt(file);
-      if (!items.length) {
+      const res = await scanReceipt(file);
+      const site = detectSite(res.siteHint);
+      if (site) draft.site = site;
+      if (!res.items.length) {
         alert(t("scan_none"));
         renderBasket({ ...draft });
         return;
       }
-      const scanned = items.map(scanItemToRow);
+      const scanned = res.items.map(scanItemToRow);
       const existing = draft.rows.filter((r) => r.id || r.qty !== "" || r.price !== "");
       draft.rows = [...existing, ...scanned];
       renderBasket({ ...draft });
@@ -871,6 +965,7 @@ function renderBasket(existingDraft) {
       (r) => r.id && Number(r.qty) > 0 && r.price !== "" && Number(r.price) >= 0
     );
     if (!valid.length || valid.length !== filled.length) return alert(t("need_basket"));
+    if (!draft.site) return alert(t("need_site"));
     try {
       const { error } = await db.from("purchases").insert(valid.map((r) => ({
         ingredient_id: r.id,
@@ -880,6 +975,21 @@ function renderBasket(existingDraft) {
         entered_by: userName(),
       })));
       if (error) throw error;
+      // The bought amounts land in the chosen site's stock.
+      if (!state.stockMissing) {
+        const byIng = {};
+        valid.forEach((r) => { byIng[r.id] = (byIng[r.id] || 0) + Number(r.qty); });
+        const stockRows = Object.entries(byIng).map(([ingredient_id, add]) => ({
+          ingredient_id,
+          site: draft.site,
+          qty: Math.max(0, (stockOf(ingredient_id, draft.site) ?? 0) + add),
+          updated_at: new Date().toISOString(),
+          updated_by: userName(),
+        }));
+        const st = await db.from("stock_levels")
+          .upsert(stockRows, { onConflict: "ingredient_id,site" });
+        if (st.error) throw st.error;
+      }
       go({ name: "home" }, { refresh: true });
     } catch (e) {
       console.error(e); alert(t("save_failed"));
@@ -1007,6 +1117,7 @@ function renderIngredient(id, existingDraft) {
     pQty: latest ? fmtQty(latest.purchased_kg) : "",
     pPrice: latest ? String(Number(latest.price_paid)) : "",
     pAfter: latest && Number(latest.wastage_kg) > 0 ? fmtQty(latestAfter) : "",
+    pSite: localStorage.getItem("arifood_site") || "",
   };
   const u = unitOf({ unit: draft.unit });
   const boughtLbl = t(u.liquid ? "bought_v" : "bought_w");
@@ -1068,6 +1179,13 @@ function renderIngredient(id, existingDraft) {
         <input type="number" id="pAfter" step="0.001" min="0" inputmode="decimal"
           value="${esc(draft.pAfter)}" placeholder="${esc(t("after_hint"))}">
       </div>
+      ${state.stockMissing ? "" : `<div class="field">
+        <label for="pSite">${esc(t("add_stock_site"))}</label>
+        <select id="pSite">
+          <option value="">${esc(t("no_site"))}</option>
+          ${SITES.map((x) => `<option value="${x}" ${draft.pSite === x ? "selected" : ""}>${esc(t("site_" + x))}</option>`).join("")}
+        </select>
+      </div>`}
 
       <div class="calc">
         <div class="caption">${esc(t("auto_calc"))}</div>
@@ -1106,6 +1224,8 @@ function renderIngredient(id, existingDraft) {
     draft.pQty = inputs[0].value;
     draft.pPrice = inputs[1].value;
     draft.pAfter = inputs[2].value;
+    const siteSel = document.getElementById("pSite");
+    if (siteSel) draft.pSite = siteSel.value;
   };
 
   const readPurchase = () => {
@@ -1171,6 +1291,17 @@ function renderIngredient(id, existingDraft) {
           ingredient_id: ingredientId, ...r.p, entered_by: userName(),
         });
         if (error) throw error;
+        // A new purchase also lands in the chosen site's stock.
+        if (draft.pSite && !state.stockMissing) {
+          const st = await db.from("stock_levels").upsert([{
+            ingredient_id: ingredientId,
+            site: draft.pSite,
+            qty: Math.max(0, (stockOf(ingredientId, draft.pSite) ?? 0) + r.p.purchased_kg),
+            updated_at: new Date().toISOString(),
+            updated_by: userName(),
+          }], { onConflict: "ingredient_id,site" });
+          if (st.error) throw st.error;
+        }
       }
       go({ name: "home" }, { refresh: true });
     } catch (e) {
@@ -1293,7 +1424,7 @@ function renderSauce(id, existingDraft) {
         captureDraft();
         draft.rows[idx].id = item.id;
         renderSauce(id, { ...draft });
-      });
+      }, { allowCreate: true });
     };
   });
   $app.querySelectorAll("[data-s-g]").forEach((inp) => {
@@ -1475,7 +1606,7 @@ function renderDish(id, existingDraft) {
         draft.rows[idx].kind = item.kind;
         draft.rows[idx].id = item.id;
         renderDish(id, { ...draft });
-      });
+      }, { allowCreate: true });
     };
   });
   $app.querySelectorAll("[data-d-g]").forEach((inp) => {
