@@ -179,18 +179,29 @@ function dishRowsOf(dish) {
 
 /* ---------- data ---------- */
 
-async function loadData() {
-  const [ings, dishes] = await Promise.all([
+// Data is cached in memory so every tap renders instantly. A fetch only
+// blocks rendering on first load; after saves/deletes the cache is marked
+// stale, and returning to Home also revalidates quietly in the background
+// so teammates' changes appear without slowing navigation down.
+let dataFresh = false;
+let lastRefreshAt = 0;
+
+async function refreshData() {
+  const jobs = [
     db.from("ingredients").select("*, purchases(*)").order("name"),
     db.from("dishes").select("*, dish_ingredients(*)").order("name"),
-  ]);
+    db.from("sauces").select("*, sauce_ingredients(*)").order("name"),
+  ];
+  if (!state.profileFetched) {
+    jobs.push(db.from("profiles").select("*").eq("user_id", session.user.id).maybeSingle());
+  }
+  const [ings, dishes, sauces, prof] = await Promise.all(jobs);
   if (ings.error) throw ings.error;
   if (dishes.error) throw dishes.error;
   state.ingredients = ings.data;
   state.dishes = dishes.data;
 
   // Sauces arrive with a later migration — degrade gracefully without it.
-  const sauces = await db.from("sauces").select("*, sauce_ingredients(*)").order("name");
   if (sauces.error) {
     state.sauces = [];
     state.saucesMissing = true;
@@ -199,38 +210,51 @@ async function loadData() {
     state.saucesMissing = false;
   }
 
-  try {
-    const { data } = await db.from("profiles")
-      .select("*").eq("user_id", session.user.id).maybeSingle();
-    state.profile = data || null;
-  } catch (_e) {
-    state.profile = null;
+  if (prof) {
+    state.profile = prof.error ? null : prof.data || null;
+    state.profileFetched = true;
   }
+  dataFresh = true;
+  lastRefreshAt = Date.now();
 }
 
 /* ---------- navigation & chrome ---------- */
 
-async function go(view) {
+async function go(view, opts = {}) {
   if (state.view.name === "home" && view.name !== "home") {
     state.ui.homeScroll = window.scrollY;
   }
+  if (opts.refresh) dataFresh = false;
   state.view = view;
   draft = null;
   await render();
   window.scrollTo(0, view.name === "home" ? state.ui.homeScroll : 0);
+
+  // Background revalidation when idling on Home (never blocks a tap).
+  if (dataFresh && view.name === "home" && Date.now() - lastRefreshAt > 15000) {
+    refreshData().then(() => {
+      if (state.view.name === "home") {
+        const y = window.scrollY;
+        renderHome();
+        window.scrollTo(0, y);
+      }
+    }).catch(() => {});
+  }
 }
 
 async function render() {
   if (!session) return renderLogin();
-  try {
-    await loadData();
-  } catch (e) {
-    console.error(e);
-    $app.innerHTML =
-      header({ home: true }) +
-      `<main class="content"><div class="error-box bad">${esc(t("load_failed"))}</div></main>`;
-    wireHeader();
-    return;
+  if (!dataFresh) {
+    try {
+      await refreshData();
+    } catch (e) {
+      console.error(e);
+      $app.innerHTML =
+        header({ home: true }) +
+        `<main class="content"><div class="error-box bad">${esc(t("load_failed"))}</div></main>`;
+      wireHeader();
+      return;
+    }
   }
   const v = state.view;
   if (!isAdmin() && (v.name === "ingredient" || v.name === "dish" || v.name === "sauce")) {
@@ -268,6 +292,9 @@ function wireHeader() {
   if (out) out.onclick = async () => {
     await db.auth.signOut();
     session = null;
+    dataFresh = false;
+    state.profile = null;
+    state.profileFetched = false;
     renderLogin();
   };
 }
@@ -483,6 +510,7 @@ function renderHome() {
         alert(error.code === "23503" ? t("ing_in_use") : t("save_failed"));
         return;
       }
+      dataFresh = false;
       render();
     };
   });
@@ -696,7 +724,7 @@ function renderBasket(existingDraft) {
         entered_by: userName(),
       })));
       if (error) throw error;
-      go({ name: "home" });
+      go({ name: "home" }, { refresh: true });
     } catch (e) {
       console.error(e); alert(t("save_failed"));
     }
@@ -889,7 +917,7 @@ function renderIngredient(id, existingDraft) {
         });
         if (error) throw error;
       }
-      go({ name: "home" });
+      go({ name: "home" }, { refresh: true });
     } catch (e) {
       console.error(e); alert(t("save_failed"));
     }
@@ -903,7 +931,7 @@ function renderIngredient(id, existingDraft) {
         alert(error.code === "23503" ? t("ing_in_use") : t("save_failed"));
         return;
       }
-      go({ name: "home" });
+      go({ name: "home" }, { refresh: true });
     };
 
     $app.querySelectorAll("[data-del-purchase]").forEach((b) => {
@@ -911,7 +939,7 @@ function renderIngredient(id, existingDraft) {
         if (!confirm(t("confirm_delete"))) return;
         const { error } = await db.from("purchases").delete().eq("id", b.dataset.delPurchase);
         if (error) { console.error(error); return alert(t("save_failed")); }
-        go({ name: "ingredient", id: ing.id });
+        go({ name: "ingredient", id: ing.id }, { refresh: true });
       };
     });
   }
@@ -1056,7 +1084,7 @@ function renderSauce(id, existingDraft) {
           .insert(rows.map((r) => ({ sauce_id: sauceId, ...r })));
         if (ins.error) throw ins.error;
       }
-      go({ name: "home" });
+      go({ name: "home" }, { refresh: true });
     } catch (e) {
       console.error(e); alert(t("save_failed"));
     }
@@ -1070,7 +1098,7 @@ function renderSauce(id, existingDraft) {
         alert(error.code === "23503" ? t("sauce_in_use") : t("save_failed"));
         return;
       }
-      go({ name: "home" });
+      go({ name: "home" }, { refresh: true });
     };
   }
 
@@ -1251,7 +1279,7 @@ function renderDish(id, existingDraft) {
           .insert(rows.map((r) => ({ dish_id: dishId, ...r })));
         if (ins.error) throw ins.error;
       }
-      go({ name: "home" });
+      go({ name: "home" }, { refresh: true });
     } catch (e) {
       console.error(e); alert(t("save_failed"));
     }
@@ -1262,7 +1290,7 @@ function renderDish(id, existingDraft) {
       if (!confirm(t("confirm_delete"))) return;
       const { error } = await db.from("dishes").delete().eq("id", dish.id);
       if (error) { console.error(error); return alert(t("save_failed")); }
-      go({ name: "home" });
+      go({ name: "home" }, { refresh: true });
     };
   }
 
