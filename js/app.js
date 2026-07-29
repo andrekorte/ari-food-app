@@ -19,10 +19,12 @@ const state = {
   dishes: [],
   sauces: [],
   saucesMissing: false, // categories/sauces migration not run yet
+  stock: [],
+  stockMissing: false,  // stock migration not run yet
   profile: null,        // this user's row in profiles (null = full access)
   view: { name: "home" },
   // Remembered navigation state so Back returns exactly where you were.
-  ui: { openIng: new Set(), openDish: new Set(), homeScroll: 0 },
+  ui: { openIng: new Set(), openDish: new Set(), openStock: new Set(), homeScroll: 0 },
 };
 let draft = null;
 
@@ -35,6 +37,19 @@ const DISH_CATS = [
   "ala_carte", "noodle_soup", "entree", "vegan", "gluten_free",
   "drinks", "dessert", "snacks", "special", "other",
 ];
+const SITES = ["ari", "yindee", "sayhi"];
+
+// Professional line-style SVG icons (stroke follows currentColor).
+const I = (path) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+const ICONS = {
+  home: I('<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.7V21h14V9.7"/><path d="M9.5 21v-6h5v6"/>'),
+  cart: I('<circle cx="9" cy="20" r="1.4"/><circle cx="17" cy="20" r="1.4"/><path d="M3 4h2.4l2.2 11.2a1.6 1.6 0 0 0 1.6 1.3h7.9a1.6 1.6 0 0 0 1.6-1.3L20.5 8H6.1"/>'),
+  stock: I('<path d="M3 7.5 12 3l9 4.5-9 4.5z"/><path d="M3 7.5V16l9 4.5 9-4.5V7.5"/><path d="M12 12v8.5"/>'),
+  sauce: I('<path d="M12 3s-6 7.2-6 11.2a6 6 0 0 0 12 0C18 10.2 12 3 12 3z"/>'),
+  camera: I('<path d="M4 8h3l2-2.5h6L17 8h3a1.5 1.5 0 0 1 1.5 1.5V19a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 19V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="14" r="3.5"/>'),
+  logout: I('<path d="M15 4h4.5v16H15"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h9.5"/>'),
+};
 
 /* ---------- helpers ---------- */
 
@@ -191,11 +206,12 @@ async function refreshData() {
     db.from("ingredients").select("*, purchases(*)").order("name"),
     db.from("dishes").select("*, dish_ingredients(*)").order("name"),
     db.from("sauces").select("*, sauce_ingredients(*)").order("name"),
+    db.from("stock_levels").select("*"),
   ];
   if (!state.profileFetched) {
     jobs.push(db.from("profiles").select("*").eq("user_id", session.user.id).maybeSingle());
   }
-  const [ings, dishes, sauces, prof] = await Promise.all(jobs);
+  const [ings, dishes, sauces, stock, prof] = await Promise.all(jobs);
   if (ings.error) throw ings.error;
   if (dishes.error) throw dishes.error;
   state.ingredients = ings.data;
@@ -208,6 +224,14 @@ async function refreshData() {
   } else {
     state.sauces = sauces.data;
     state.saucesMissing = false;
+  }
+
+  if (stock.error) {
+    state.stock = [];
+    state.stockMissing = true;
+  } else {
+    state.stock = stock.data;
+    state.stockMissing = false;
   }
 
   if (prof) {
@@ -265,6 +289,7 @@ async function render() {
   else if (v.name === "dish") renderDish(v.id);
   else if (v.name === "sauce") renderSauce(v.id);
   else if (v.name === "basket") renderBasket();
+  else if (v.name === "stock") renderStock();
   else renderHome();
 }
 
@@ -278,7 +303,7 @@ function header({ home, title } = {}) {
     </span>
     <span class="actions">
       <button class="chipbtn" id="btnLang">${LANG === "en" ? "ไทย" : "EN"}</button>
-      ${home ? `<button class="chipbtn" id="btnLogout">${esc(userName())} ⏻</button>` : ""}
+      ${home ? `<button class="chipbtn" id="btnLogout">${esc(userName())}<span class="icn">${ICONS.logout}</span></button>` : ""}
     </span>
   </header>`;
 }
@@ -302,10 +327,13 @@ function wireHeader() {
 function tabbar(active) {
   return `<nav class="tabbar"><div class="inner">
     <button class="tab ${active === "home" ? "active" : ""}" id="tabHome">
-      <span class="ticon">🏠</span>${esc(t("tab_home"))}
+      <span class="ticon">${ICONS.home}</span>${esc(t("tab_home"))}
     </button>
     <button class="tab ${active === "basket" ? "active" : ""}" id="tabBasket">
-      <span class="ticon">🛒</span>${esc(t("tab_purchase"))}
+      <span class="ticon">${ICONS.cart}</span>${esc(t("tab_purchase"))}
+    </button>
+    <button class="tab ${active === "stock" ? "active" : ""}" id="tabStock">
+      <span class="ticon">${ICONS.stock}</span>${esc(t("tab_stock"))}
     </button>
   </div></nav>`;
 }
@@ -315,6 +343,8 @@ function wireTabbar() {
   if (h) h.onclick = () => go({ name: "home" });
   const b = document.getElementById("tabBasket");
   if (b) b.onclick = () => go({ name: "basket" });
+  const st = document.getElementById("tabStock");
+  if (st) st.onclick = () => go({ name: "stock" });
 }
 
 /* ---------- login ---------- */
@@ -534,7 +564,7 @@ function openPicker(groups, onPick) {
       </summary>
       <div class="pgbody">
         ${items.map((it) => `<button class="prow" data-g="${gi}" data-id="${it.id}" data-kind="${it.kind}">
-          <span class="pname">${esc(it.label)}</span>
+          <span class="pname">${it.sauce ? `<span class="sicon">${ICONS.sauce}</span>` : ""}${esc(it.label)}</span>
           <span class="psub num">${it.sub || ""}</span>
         </button>`).join("")}
       </div>
@@ -594,7 +624,7 @@ function ingredientPickerGroups({ cats = CATS, includeSauceRecipes = false } = {
         ...state.sauces.map((s) => {
           const st = sauceStats(s);
           return {
-            kind: "sauce", id: s.id, label: `🥣 ${dName(s)}`,
+            kind: "sauce", id: s.id, sauce: true, label: dName(s),
             sub: st ? `${money(st.perG, 3)}/${t("u_g")}` : esc(t("no_price_yet")),
           };
         }),
@@ -615,7 +645,7 @@ function pickedLabel(row) {
   if (!row.id) return null;
   if (row.kind === "sauce") {
     const s = findSauce(row.id);
-    return s ? `🥣 ${dName(s)}` : null;
+    return s ? dName(s) : null;
   }
   const i = findIngredient(row.id);
   return i ? dName(i) : null;
@@ -625,6 +655,82 @@ function rowSuffix(row) {
   if (row.kind === "sauce" || !row.id) return t("u_g");
   const i = findIngredient(row.id);
   return i ? unitOf(i).small : t("u_g");
+}
+
+/* ---------- receipt scanning ---------- */
+
+function downscaleImage(file, maxSide, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * scale);
+      c.height = Math.round(img.height * scale);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(img.src);
+      resolve(c.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function scanReceipt(file) {
+  const dataUrl = await downscaleImage(file, 1600, 0.85);
+  const comma = dataUrl.indexOf(",");
+  const mime = dataUrl.slice(5, dataUrl.indexOf(";"));
+  const image = dataUrl.slice(comma + 1);
+  const { data, error } = await db.functions.invoke("scan-receipt", {
+    body: { image, mime },
+  });
+  if (error) throw error;
+  if (data && data.error) throw new Error(data.error);
+  return (data && data.items) || [];
+}
+
+function normTxt(x) {
+  return String(x || "").toLowerCase()
+    .replace(/[^a-z0-9\u0e00-\u0e7f ]+/g, " ")
+    .replace(/\s+/g, " ").trim();
+}
+
+// Fuzzy-match a receipt line to an ingredient by English or Thai name.
+function matchIngredient(name) {
+  const n = normTxt(name);
+  if (!n) return null;
+  let best = null, bestScore = 0;
+  for (const ing of state.ingredients) {
+    for (const cand of [ing.name, ing.name_th]) {
+      if (!cand) continue;
+      const c = normTxt(cand);
+      let score = 0;
+      if (c === n) score = 1;
+      else if (c.includes(n) || n.includes(c)) score = 0.8;
+      else {
+        const nt = n.split(" ").filter((w) => w.length > 2);
+        const ct = new Set(c.split(" "));
+        const overlap = nt.filter((w) => ct.has(w)).length;
+        score = nt.length ? (overlap / Math.max(nt.length, ct.size)) : 0;
+      }
+      if (score > bestScore) { bestScore = score; best = ing; }
+    }
+  }
+  return bestScore >= 0.45 ? best : null;
+}
+
+function scanItemToRow(item) {
+  const ing = matchIngredient(item.name);
+  let qty = Number(item.quantity);
+  const unit = String(item.unit || "").toLowerCase();
+  if (unit === "g" || unit === "ml") qty = qty / 1000;
+  const price = Number(item.price);
+  return {
+    id: ing ? ing.id : "",
+    qty: qty > 0 ? String(Number(qty.toFixed(3))) : "",
+    price: isFinite(price) && price >= 0 ? String(price) : "",
+    scanLabel: String(item.name || ""),
+  };
 }
 
 /* ---------- basket: record a whole shopping trip ---------- */
@@ -638,7 +744,7 @@ function renderBasket(existingDraft) {
     const suffix = ing ? unitOf(ing).big : t("u_kg");
     return `<div class="erow">
       <button class="pickbtn ${label ? "" : "placeholder"}" data-b-pick="${idx}">
-        ${esc(label || t("choose_item"))}
+        ${esc(label || (r.scanLabel ? "? " + r.scanLabel : t("choose_item")))}
       </button>
       <input type="number" class="amt" data-b-qty="${idx}" step="0.001" min="0"
         inputmode="decimal" value="${esc(r.qty)}" aria-label="${esc(t("amount"))}">
@@ -650,9 +756,12 @@ function renderBasket(existingDraft) {
   }).join("");
 
   $app.innerHTML = `
-    ${header({ title: `🛒 ${t("new_purchase")}` })}
+    ${header({ title: t("new_purchase") })}
     <main class="content">
       <p class="muted" style="margin:0.2rem 0 0.8rem; font-size:0.85rem">${esc(t("basket_hint"))}</p>
+      <button class="btn ghost small" id="btnScan"><span class="binline">${ICONS.camera}</span>${esc(t("scan_receipt"))}</button>
+      <input type="file" id="scanFile" accept="image/*" capture="environment" style="display:none">
+      <div style="height:0.5rem"></div>
       ${rowsHtml}
       <button class="btn ghost small" id="btnAddRow">${esc(t("add_item"))}</button>
       <div class="calc">
@@ -708,6 +817,32 @@ function renderBasket(existingDraft) {
     renderBasket({ ...draft });
   };
 
+  document.getElementById("btnScan").onclick = () => document.getElementById("scanFile").click();
+  document.getElementById("scanFile").onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const btn = document.getElementById("btnScan");
+    btn.disabled = true;
+    btn.textContent = t("scanning");
+    captureDraft();
+    try {
+      const items = await scanReceipt(file);
+      if (!items.length) {
+        alert(t("scan_none"));
+        renderBasket({ ...draft });
+        return;
+      }
+      const scanned = items.map(scanItemToRow);
+      const existing = draft.rows.filter((r) => r.id || r.qty !== "" || r.price !== "");
+      draft.rows = [...existing, ...scanned];
+      renderBasket({ ...draft });
+    } catch (err) {
+      console.error(err);
+      alert(t("scan_failed"));
+      renderBasket({ ...draft });
+    }
+  };
+
   document.getElementById("btnSave").onclick = async () => {
     captureDraft();
     const filled = draft.rows.filter((r) => r.id || r.qty !== "" || r.price !== "");
@@ -731,6 +866,105 @@ function renderBasket(existingDraft) {
   };
 
   updateTotal();
+}
+
+/* ---------- stock by site ---------- */
+
+function stockOf(ingId, site) {
+  const r = state.stock.find((x) => x.ingredient_id === ingId && x.site === site);
+  return r ? Number(r.qty) : null;
+}
+
+function renderStock(existingDraft) {
+  draft = existingDraft || { edits: {} };
+
+  const stRow = (ing) => {
+    const u = unitOf(ing);
+    return `<div class="strow">
+      <span class="stname">${esc(dName(ing))} <span class="stunit">${esc(u.big)}</span></span>
+      ${SITES.map((site) => {
+        const key = ing.id + "|" + site;
+        const current = stockOf(ing.id, site);
+        const val = key in draft.edits ? draft.edits[key] : (current == null ? "" : fmtQty(current));
+        return `<input type="number" step="0.001" min="0" inputmode="decimal"
+          data-st="${key}" value="${esc(val)}" aria-label="${esc(t("site_" + site))}">`;
+      }).join("")}
+    </div>`;
+  };
+
+  const sections = CATS.map((cat) => {
+    const items = state.ingredients.filter((i) => catOf(i) === cat);
+    if (!items.length) return "";
+    return `<details class="group" data-st-cat="${cat}" ${state.ui.openStock.has(cat) ? "open" : ""}>
+      <summary>
+        <span>${esc(t("cat_" + cat))}</span>
+        <span class="gright"><span class="badge num">${items.length}</span><span class="chev">›</span></span>
+      </summary>
+      <div class="sthead"><span></span>${SITES.map((x) => `<span>${esc(t("site_" + x))}</span>`).join("")}</div>
+      ${items.map(stRow).join("")}
+    </details>`;
+  }).join("");
+
+  $app.innerHTML = `
+    ${header({ title: t("tab_stock") })}
+    <main class="content">
+      ${state.stockMissing
+        ? `<div class="error-box">${esc(t("stock_migration_needed"))}</div>`
+        : `<p class="muted" style="margin:0.2rem 0 0.8rem; font-size:0.85rem">${esc(t("stock_hint"))}</p>
+      <button class="btn" id="btnStSave" disabled>${esc(t("save_changes"))}</button>
+      <div style="height:0.6rem"></div>
+      <div class="card">${sections}</div>`}
+    </main>
+    ${tabbar("stock")}`;
+
+  wireHeader();
+  wireTabbar();
+  if (state.stockMissing) return;
+
+  const saveBtn = document.getElementById("btnStSave");
+  const updateSaveBtn = () => {
+    const n = Object.keys(draft.edits).length;
+    saveBtn.disabled = n === 0;
+    saveBtn.textContent = n ? `${t("save_changes")} (${n})` : t("save_changes");
+  };
+
+  $app.querySelectorAll("details[data-st-cat]").forEach((d) => {
+    d.addEventListener("toggle", () => {
+      if (d.open) state.ui.openStock.add(d.dataset.stCat);
+      else state.ui.openStock.delete(d.dataset.stCat);
+    });
+  });
+  $app.querySelectorAll("[data-st]").forEach((inp) => {
+    inp.oninput = () => {
+      draft.edits[inp.dataset.st] = inp.value;
+      updateSaveBtn();
+    };
+  });
+
+  saveBtn.onclick = async () => {
+    const rows = [];
+    for (const [key, val] of Object.entries(draft.edits)) {
+      if (String(val).trim() === "") continue;
+      const qty = Number(val);
+      if (!(qty >= 0)) return alert(t("bad_numbers"));
+      const [ingredient_id, site] = key.split("|");
+      rows.push({
+        ingredient_id, site, qty,
+        updated_at: new Date().toISOString(), updated_by: userName(),
+      });
+    }
+    if (!rows.length) return;
+    try {
+      const { error } = await db.from("stock_levels")
+        .upsert(rows, { onConflict: "ingredient_id,site" });
+      if (error) throw error;
+      go({ name: "stock" }, { refresh: true });
+    } catch (e) {
+      console.error(e); alert(t("save_failed"));
+    }
+  };
+
+  updateSaveBtn();
 }
 
 /* ---------- ingredient editor ---------- */
@@ -1125,7 +1359,7 @@ function renderDish(id, existingDraft) {
     const label = pickedLabel(r);
     return `<div class="erow">
       <button class="pickbtn ${label ? "" : "placeholder"}" data-d-pick="${idx}">
-        ${esc(label || t("choose_item"))}
+        ${r.kind === "sauce" && label ? `<span class="sicon">${ICONS.sauce}</span>` : ""}${esc(label || t("choose_item"))}
       </button>
       <input type="number" class="amt" data-d-g="${idx}" step="1" min="0"
         inputmode="numeric" value="${esc(r.grams)}" aria-label="${esc(t("amount"))}">

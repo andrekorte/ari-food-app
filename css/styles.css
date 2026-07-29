@@ -385,3 +385,33 @@ h2.ptitle { margin: 0.2rem 0 1rem; font-size: 1.35rem; }
   details.group summary .chev { transition: none; }
   .btn:active { transform: none; }
 }
+
+/* ---- SVG icons ---- */
+.ticon svg { width: 26px; height: 26px; display: block; }
+.sicon { display: inline-flex; vertical-align: -2px; margin-right: 0.4rem; color: var(--red); }
+.sicon svg { width: 15px; height: 15px; }
+.binline { display: inline-flex; vertical-align: -4px; margin-right: 0.5rem; }
+.binline svg { width: 19px; height: 19px; }
+.chipbtn .icn { display: inline-flex; vertical-align: -3px; margin-left: 0.35rem; }
+.chipbtn .icn svg { width: 15px; height: 15px; }
+
+/* ---- Stock by site ---- */
+.sthead, .strow {
+  display: grid; grid-template-columns: 1fr 4.4rem 4.4rem 4.4rem;
+  gap: 0.4rem; align-items: center; padding: 0.45rem 0.95rem;
+}
+.sthead {
+  font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted); font-weight: 700; border-top: 1px solid var(--line);
+  padding-bottom: 0.15rem; text-align: right;
+}
+.strow { border-top: 1px solid var(--line); min-height: 54px; }
+.strow .stname {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 0.95rem;
+}
+.strow .stunit { color: var(--muted); font-size: 0.72rem; }
+.strow input {
+  min-height: 44px; padding: 0.45rem 0.5rem; text-align: right;
+  font-size: 0.95rem; border-radius: 10px; box-shadow: none;
+}
