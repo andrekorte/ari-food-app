@@ -48,6 +48,7 @@ const ICONS = {
   stock: I('<path d="M3 7.5 12 3l9 4.5-9 4.5z"/><path d="M3 7.5V16l9 4.5 9-4.5V7.5"/><path d="M12 12v8.5"/>'),
   sauce: I('<path d="M12 3s-6 7.2-6 11.2a6 6 0 0 0 12 0C18 10.2 12 3 12 3z"/>'),
   camera: I('<path d="M4 8h3l2-2.5h6L17 8h3a1.5 1.5 0 0 1 1.5 1.5V19a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 19V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="14" r="3.5"/>'),
+  photo: I('<rect x="3" y="5" width="18" height="15" rx="2"/><circle cx="9" cy="10.5" r="1.6"/><path d="M3.5 17.5 9 13l4 3.5 3.5-3 4 3.5"/>'),
   logout: I('<path d="M15 4h4.5v16H15"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h9.5"/>'),
 };
 
@@ -849,8 +850,12 @@ function renderBasket(existingDraft) {
           ${SITES.map((x) => `<button type="button" class="segbtn ${draft.site === x ? "active" : ""}" data-site="${x}">${esc(t("site_" + x))}</button>`).join("")}
         </div>
       </div>
-      <button class="btn ghost small" id="btnScan"><span class="binline">${ICONS.camera}</span>${esc(t("scan_receipt"))}</button>
+      <div class="row2">
+        <button class="btn ghost small" id="btnScan"><span class="binline">${ICONS.camera}</span>${esc(t("scan_receipt"))}</button>
+        <button class="btn ghost small" id="btnUpload"><span class="binline">${ICONS.photo}</span>${esc(t("upload_receipt"))}</button>
+      </div>
       <input type="file" id="scanFile" accept="image/*" capture="environment" style="display:none">
+      <input type="file" id="uploadFile" accept="image/*" style="display:none">
       <div style="height:0.5rem"></div>
       ${rowsHtml}
       <button class="btn ghost small" id="btnAddRow">${esc(t("add_item"))}</button>
@@ -930,12 +935,9 @@ function renderBasket(existingDraft) {
     renderBasket({ ...draft });
   };
 
-  document.getElementById("btnScan").onclick = () => document.getElementById("scanFile").click();
-  document.getElementById("scanFile").onchange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const btn = document.getElementById("btnScan");
-    btn.disabled = true;
+  const processReceipt = async (file, btn) => {
+    document.getElementById("btnScan").disabled = true;
+    document.getElementById("btnUpload").disabled = true;
     btn.textContent = t("scanning");
     captureDraft();
     try {
@@ -956,6 +958,14 @@ function renderBasket(existingDraft) {
       alert(t("scan_failed"));
       renderBasket({ ...draft });
     }
+  };
+  document.getElementById("btnScan").onclick = () => document.getElementById("scanFile").click();
+  document.getElementById("btnUpload").onclick = () => document.getElementById("uploadFile").click();
+  document.getElementById("scanFile").onchange = (e) => {
+    if (e.target.files[0]) processReceipt(e.target.files[0], document.getElementById("btnScan"));
+  };
+  document.getElementById("uploadFile").onchange = (e) => {
+    if (e.target.files[0]) processReceipt(e.target.files[0], document.getElementById("btnUpload"));
   };
 
   document.getElementById("btnSave").onclick = async () => {
