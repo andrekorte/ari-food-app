@@ -731,6 +731,25 @@ function downscaleImage(file, maxSide, quality) {
   });
 }
 
+// Big full-screen progress indicator while a receipt is being read.
+function showScanOverlay() {
+  hideScanOverlay();
+  const el = document.createElement("div");
+  el.className = "scanoverlay";
+  el.id = "scanOverlay";
+  el.innerHTML = `<div class="scanbox">
+    <div class="spinner" aria-hidden="true"></div>
+    <p class="sbig">${esc(t("scanning"))}</p>
+    <p class="ssub">${esc(t("scanning_hint"))}</p>
+  </div>`;
+  document.body.appendChild(el);
+}
+
+function hideScanOverlay() {
+  const el = document.getElementById("scanOverlay");
+  if (el) el.remove();
+}
+
 async function scanReceipt(file) {
   const dataUrl = await downscaleImage(file, 1600, 0.85);
   const comma = dataUrl.indexOf(",");
@@ -938,13 +957,14 @@ function renderBasket(existingDraft) {
   const processReceipt = async (file, btn) => {
     document.getElementById("btnScan").disabled = true;
     document.getElementById("btnUpload").disabled = true;
-    btn.textContent = t("scanning");
+    showScanOverlay();
     captureDraft();
     try {
       const res = await scanReceipt(file);
       const site = detectSite(res.siteHint);
       if (site) draft.site = site;
       if (!res.items.length) {
+        hideScanOverlay();
         alert(t("scan_none"));
         renderBasket({ ...draft });
         return;
@@ -957,6 +977,8 @@ function renderBasket(existingDraft) {
       console.error(err);
       alert(t("scan_failed"));
       renderBasket({ ...draft });
+    } finally {
+      hideScanOverlay();
     }
   };
   document.getElementById("btnScan").onclick = () => document.getElementById("scanFile").click();
