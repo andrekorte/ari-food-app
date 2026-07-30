@@ -3,13 +3,12 @@
  * Headings: Rubik. Body: Karla. Fixed glass header + bottom tab bar.
  * Sized for phones: large type, 54px+ buttons, filled tinted actions. */
 :root {
-  --paper: #faf5f2;
-  --paper-glass: rgba(250, 245, 242, 0.9);
+  --paper: #f2f0ec;
   --ink: #291b1b;
   --muted: #6b5f5c;
-  --line: #e6ded8;
+  --line: #e3ddd6;
   --panel: #ffffff;
-  --field: #f5ede7;
+  --field: #f6f3ef;
   --red: #ea1c24;
   --red-soft: rgba(234, 28, 36, 0.09);
   --yellow: #ffcf0e;
@@ -17,24 +16,14 @@
   --amber-text: #96700a;
   --danger: #8f1d14;
   --shadow: 0 2px 10px rgba(41, 27, 27, 0.07);
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #1d1c1c;
-    --paper-glass: rgba(29, 28, 28, 0.9);
-    --ink: #f3ece6;
-    --muted: #a89a94;
-    --line: #453b38;
-    --panel: #2a2321;
-    --field: #352c29;
-    --red: #ff5158;
-    --red-soft: rgba(255, 81, 88, 0.16);
-    --yellow: #ffcf0e;
-    --yellow-soft: #3d3418;
-    --amber-text: #ffcf0e;
-    --danger: #ff9184;
-    --shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
-  }
+  /* dark chrome: header + bottom tab bar */
+  --chrome: #191715;
+  --chrome-glass: rgba(25, 23, 21, 0.93);
+  --chrome-text: #f5efe9;
+  --chrome-muted: #969089;
+  --chrome-line: #3a3733;
+  --chrome-chip: #2b2825;
+  --red-bright: #ff5157;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -66,7 +55,7 @@ h2, .brand, .card-title, .login-logo .name, .htitle {
 .header {
   position: sticky; top: 0; z-index: 30;
   padding: calc(0.65rem + env(safe-area-inset-top)) 1rem 0.65rem;
-  background: var(--paper-glass);
+  background: var(--chrome-glass);
   -webkit-backdrop-filter: saturate(1.6) blur(18px);
   backdrop-filter: saturate(1.6) blur(18px);
   border-bottom: 3px solid var(--yellow);
@@ -77,25 +66,29 @@ h2, .brand, .card-title, .login-logo .name, .htitle {
   display: inline-flex; align-items: center; gap: 0.6rem; min-width: 0;
 }
 .header .brand, .header .htitle {
-  font-weight: 700; font-size: 1.18rem; color: var(--red);
+  font-weight: 700; font-size: 1.18rem; color: var(--red-bright);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .brand-logo { height: 2.3rem; width: 2.3rem; border-radius: 50%; flex: none; }
 .header .back {
-  color: var(--red); background: none; border: none; cursor: pointer;
+  color: var(--red-bright); background: none; border: none; cursor: pointer;
   font-family: inherit; font-size: 1.08rem; font-weight: 700;
   padding: 0.5rem 0.6rem 0.5rem 0; flex: none;
 }
 .header .actions { display: flex; gap: 0.45rem; align-items: center; flex: none; }
+.header .chipbtn {
+  background: var(--chrome-chip); border-color: var(--chrome-line);
+  color: var(--chrome-text); box-shadow: none;
+}
 
 /* ---- Bottom tab bar ---- */
 .tabbar {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
   display: flex; justify-content: center;
-  background: var(--paper-glass);
+  background: var(--chrome-glass);
   -webkit-backdrop-filter: saturate(1.6) blur(18px);
   backdrop-filter: saturate(1.6) blur(18px);
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--chrome-line);
   padding-bottom: env(safe-area-inset-bottom);
 }
 .tabbar .inner { display: flex; width: 100%; max-width: 640px; }
@@ -103,10 +96,10 @@ h2, .brand, .card-title, .login-logo .name, .htitle {
   flex: 1; display: flex; flex-direction: column; align-items: center;
   gap: 0.12rem; padding: 0.55rem 0 0.5rem;
   background: none; border: none; cursor: pointer; font-family: inherit;
-  color: var(--muted); font-size: 0.78rem; font-weight: 700;
+  color: var(--chrome-muted); font-size: 0.78rem; font-weight: 700;
 }
 .tab .ticon { font-size: 1.7rem; line-height: 1.1; }
-.tab.active { color: var(--red); }
+.tab.active { color: var(--yellow); }
 
 /* ---- Page content ---- */
 .content {
@@ -280,7 +273,7 @@ details.group[open] summary .chev { transform: rotate(90deg); }
 }
 .picker .phead {
   position: sticky; top: 0; z-index: 5;
-  background: var(--paper-glass);
+  background: var(--chrome-glass);
   -webkit-backdrop-filter: saturate(1.6) blur(18px);
   backdrop-filter: saturate(1.6) blur(18px);
   padding: calc(0.7rem + env(safe-area-inset-top)) 1rem 0.7rem;
@@ -289,7 +282,7 @@ details.group[open] summary .chev { transform: rotate(90deg); }
 }
 .picker .phead input { flex: 1; }
 .picker .pcancel {
-  flex: none; background: none; border: none; color: var(--red);
+  flex: none; background: none; border: none; color: var(--red-bright);
   font: inherit; font-size: 1.05rem; font-weight: 700; cursor: pointer;
   padding: 0.55rem 0.25rem;
 }
