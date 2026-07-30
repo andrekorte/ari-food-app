@@ -6,6 +6,6 @@
   "background_color": "#faf5f2",
   "theme_color": "#ffcf0e",
   "icons": [
-    { "src": "assets/ari-logo.png", "sizes": "338x338", "type": "image/png" }
+    { "src": "assets/app-icon.png", "sizes": "512x512", "type": "image/png" }
   ]
 }
