@@ -945,6 +945,42 @@ function rowSuffix(row) {
   return i ? unitOf(i).small : t("u_g");
 }
 
+/* ---------- purchase history ---------- */
+
+// The batch columns arrive with a later migration; without them the app
+// still groups a basket by the timestamp its rows were written with.
+function hasPurchaseBatches() {
+  for (const ing of state.ingredients)
+    for (const p of ing.purchases || []) return "batch_id" in p;
+  return false;
+}
+
+// Every saved basket, newest first: {key, at, site, rows[], total}
+function purchaseBatches() {
+  const groups = new Map();
+  for (const ing of state.ingredients) {
+    for (const p of ing.purchases || []) {
+      const key = p.batch_id || new Date(p.purchased_at).toISOString();
+      if (!groups.has(key)) {
+        groups.set(key, { key, at: p.purchased_at, site: p.site || null, rows: [], total: 0 });
+      }
+      const g = groups.get(key);
+      g.rows.push({ ...p, ing });
+      g.total += Number(p.price_paid) || 0;
+      if (!g.site && p.site) g.site = p.site;
+      if (new Date(p.purchased_at) > new Date(g.at)) g.at = p.purchased_at;
+    }
+  }
+  return [...groups.values()].sort((a, b) => new Date(b.at) - new Date(a.at));
+}
+
+function dateTimeShort(iso) {
+  const d = new Date(iso);
+  return d.toLocaleString(LANG === "th" ? "th-TH" : "en-AU", {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  });
+}
+
 /* ---------- receipt scanning ---------- */
 
 function downscaleImage(file, maxSide, quality) {
@@ -1097,6 +1133,45 @@ function scanItemToRow(item) {
 
 /* ---------- basket: record a whole shopping trip ---------- */
 
+// Past purchases: one collapsible row per basket, newest first.
+function historyHtml() {
+  const batches = purchaseBatches().slice(0, 25);
+  if (!batches.length) return "";
+  return `<p class="section-label">${esc(t("purchase_history"))}</p>
+    <div class="card">
+      ${batches.map((b) => `<details class="group">
+        <summary>
+          <span>${esc(dateTimeShort(b.at))}${b.site ? ` · ${esc(t("site_" + b.site))}` : ""}</span>
+          <span class="gright">
+            <span class="badge num">${money(b.total)}</span><span class="chev">›</span>
+          </span>
+        </summary>
+        <div class="scroll-x" style="padding:0.3rem 0.6rem">
+          <table class="list">
+            <thead><tr>
+              <th>${esc(t("ingredient"))}</th>
+              <th class="num">${esc(t("amount"))}</th>
+              <th class="num">${esc(t("price"))}</th>
+            </tr></thead>
+            <tbody class="num">
+              ${b.rows.map((r) => {
+                const u = unitOf(r.ing);
+                return `<tr>
+                  <td>${esc(dName(r.ing))}</td>
+                  <td class="num">${fmtQty(r.purchased_kg)} ${esc(u.big)}</td>
+                  <td class="num">${money(r.price_paid)}</td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+        <p class="empty" style="border:none; font-size:0.8rem">
+          ${esc(t("entered_by"))}: ${esc(b.rows[0].entered_by || "–")}
+        </p>
+      </details>`).join("")}
+    </div>`;
+}
+
 function renderBasket(existingDraft) {
   draft = existingDraft || {
     site: localStorage.getItem("arifood_site") || "",
@@ -1143,6 +1218,8 @@ function renderBasket(existingDraft) {
         <div class="crow num"><span>${esc(t("basket_total"))}</span><strong id="basketTotal">$0.00</strong></div>
       </div>
       <button class="btn" id="btnSave">${esc(t("save_all"))}</button>
+
+      ${historyHtml()}
     </main>
     ${tabbar("basket")}`;
 
@@ -1265,12 +1342,14 @@ function renderBasket(existingDraft) {
       // Learn every scanned wording that ended up assigned to an ingredient.
       await Promise.all(valid.filter((r) => r.scanLabel)
         .map((r) => learnAlias(r.scanLabel, r.id)));
+      const batch = hasPurchaseBatches() && crypto.randomUUID ? crypto.randomUUID() : null;
       const { error } = await db.from("purchases").insert(valid.map((r) => ({
         ingredient_id: r.id,
         purchased_kg: Number(r.qty),
         price_paid: Number(r.price),
         wastage_kg: 0,
         entered_by: userName(),
+        ...(batch ? { batch_id: batch, site: draft.site } : {}),
       })));
       if (error) throw error;
       // The bought amounts land in the chosen site's stock.
