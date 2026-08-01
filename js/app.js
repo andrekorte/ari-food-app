@@ -53,6 +53,7 @@ const ICONS = {
   camera: I('<path d="M4 8h3l2-2.5h6L17 8h3a1.5 1.5 0 0 1 1.5 1.5V19a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 19V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="14" r="3.5"/>'),
   photo: I('<rect x="3" y="5" width="18" height="15" rx="2"/><circle cx="9" cy="10.5" r="1.6"/><path d="M3.5 17.5 9 13l4 3.5 3.5-3 4 3.5"/>'),
   logout: I('<path d="M15 4h4.5v16H15"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h9.5"/>'),
+  check: I('<path d="M4.5 12.5 9.5 17.5 19.5 6.5"/>'),
 };
 
 /* ---------- helpers ---------- */
@@ -228,6 +229,26 @@ function dishRowsOf(dish) {
       ? { kind: "sauce", id: r.sauce_id, grams: r.grams }
       : { kind: "ing", id: r.ingredient_id, grams: r.grams }
   );
+}
+
+/* ---------- confirmation toast ---------- */
+
+let toastTimer = null;
+function showToast(title, detail) {
+  const old = document.getElementById("toast");
+  if (old) old.remove();
+  if (toastTimer) clearTimeout(toastTimer);
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.id = "toast";
+  el.innerHTML = `<span class="ticon">${ICONS.check}</span>
+    <span class="tbody"><strong>${esc(title)}</strong>${detail ? `<span>${esc(detail)}</span>` : ""}</span>`;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("in"));
+  toastTimer = setTimeout(() => {
+    el.classList.remove("in");
+    setTimeout(() => el.remove(), 250);
+  }, 4500);
 }
 
 /* ---------- data ---------- */
@@ -1188,7 +1209,14 @@ function renderBasket(existingDraft) {
           .upsert(stockRows, { onConflict: "ingredient_id,site" });
         if (st.error) throw st.error;
       }
-      go({ name: "home" }, { refresh: true });
+      const spent = valid.reduce((sum, r) => sum + Number(r.price), 0);
+      const site = draft.site;
+      await go({ name: "home" }, { refresh: true });
+      showToast(
+        t("saved_purchase").replace("{n}", valid.length),
+        `${money(spent)} · ${t("added_to_stock").replace("{site}", t("site_" + site))}`
+      );
+      return;
     } catch (e) {
       console.error(e); alert(t("save_failed"));
     }
@@ -1287,7 +1315,10 @@ function renderStock(existingDraft) {
       const { error } = await db.from("stock_levels")
         .upsert(rows, { onConflict: "ingredient_id,site" });
       if (error) throw error;
-      go({ name: "stock" }, { refresh: true });
+      const n = rows.length;
+      await go({ name: "stock" }, { refresh: true });
+      showToast(t("saved_stock").replace("{n}", n));
+      return;
     } catch (e) {
       console.error(e); alert(t("save_failed"));
     }
