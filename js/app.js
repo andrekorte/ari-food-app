@@ -22,6 +22,7 @@ const state = {
   stock: [],
   stockMissing: false,  // stock migration not run yet
   proteins: [],         // customer protein choices (chicken, pork, …)
+  aliases: [],          // learned invoice wordings -> ingredient
   profile: null,        // this user's row in profiles (null = full access)
   view: { name: "home" },
   // Remembered navigation state so Back returns exactly where you were.
@@ -244,11 +245,12 @@ async function refreshData() {
     db.from("sauces").select("*, sauce_ingredients(*)").order("name"),
     db.from("stock_levels").select("*"),
     db.from("protein_options").select("*").order("sort_order"),
+    db.from("ingredient_aliases").select("*"),
   ];
   if (!state.profileFetched) {
     jobs.push(db.from("profiles").select("*").eq("user_id", session.user.id).maybeSingle());
   }
-  const [ings, dishes, sauces, stock, prots, prof] = await Promise.all(jobs);
+  const [ings, dishes, sauces, stock, prots, aliases, prof] = await Promise.all(jobs);
   if (ings.error) throw ings.error;
   if (dishes.error) throw dishes.error;
   state.ingredients = ings.data;
@@ -264,6 +266,7 @@ async function refreshData() {
   }
 
   state.proteins = prots.error ? [] : prots.data;
+  state.aliases = aliases.error ? [] : aliases.data;
 
   if (stock.error) {
     state.stock = [];
@@ -857,7 +860,34 @@ function scoreCandidates(name) {
 // Auto-match only with high confidence AND a clear winner — an ambiguous
 // line (e.g. "Chicken" matching four chicken cuts) stays unresolved so the
 // user picks from the best-matches list instead of a silent wrong guess.
+// A wording the team has already resolved once — an exact, certain match.
+function aliasMatch(name) {
+  const key = normTxt(name);
+  if (!key) return null;
+  const a = state.aliases.find((x) => x.alias_key === key);
+  return a ? findIngredient(a.ingredient_id) : null;
+}
+
+// Remember the user's choice so the same invoice wording matches next time.
+async function learnAlias(text, ingredientId) {
+  const key = normTxt(text);
+  if (!key || !ingredientId) return;
+  const existing = state.aliases.find((x) => x.alias_key === key);
+  if (existing && existing.ingredient_id === ingredientId) return;
+  const row = {
+    alias_key: key, alias_text: String(text).trim(),
+    ingredient_id: ingredientId, created_by: userName(),
+  };
+  const { data, error } = await db.from("ingredient_aliases")
+    .upsert(row, { onConflict: "alias_key" }).select().maybeSingle();
+  if (error) { console.error(error); return; }
+  state.aliases = state.aliases.filter((x) => x.alias_key !== key);
+  state.aliases.push(data || row);
+}
+
 function matchIngredient(name) {
+  const known = aliasMatch(name);
+  if (known) return known;
   const ranked = scoreCandidates(name);
   if (!ranked.length) return null;
   const top = ranked[0];
@@ -867,14 +897,15 @@ function matchIngredient(name) {
 }
 
 function scanItemToRow(item) {
-  const ing = matchIngredient(item.name);
+  const known = aliasMatch(item.name);
+  const ing = known || matchIngredient(item.name);
   let qty = Number(item.quantity);
   const unit = String(item.unit || "").toLowerCase();
   if (unit === "g" || unit === "ml") qty = qty / 1000;
   const price = Number(item.price);
   return {
     id: ing ? ing.id : "",
-    auto: !!ing,
+    auto: !!ing && !known,   // known wordings are certain, no verify flag
     qty: qty > 0 ? String(Number(qty.toFixed(3))) : "",
     price: isFinite(price) && price >= 0 ? String(price) : "",
     scanLabel: String(item.name || ""),
@@ -977,6 +1008,8 @@ function renderBasket(existingDraft) {
         captureDraft();
         draft.rows[idx].id = item.id;
         draft.rows[idx].auto = false;
+        // Teach the app this supplier wording for next time.
+        if (row.scanLabel) learnAlias(row.scanLabel, item.id);
         renderBasket({ ...draft });
       }, opts);
     };
@@ -1046,6 +1079,9 @@ function renderBasket(existingDraft) {
     if (!valid.length || valid.length !== filled.length) return alert(t("need_basket"));
     if (!draft.site) return alert(t("need_site"));
     try {
+      // Learn every scanned wording that ended up assigned to an ingredient.
+      await Promise.all(valid.filter((r) => r.scanLabel)
+        .map((r) => learnAlias(r.scanLabel, r.id)));
       const { error } = await db.from("purchases").insert(valid.map((r) => ({
         ingredient_id: r.id,
         purchased_kg: Number(r.qty),
