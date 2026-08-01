@@ -26,7 +26,8 @@ const state = {
   profile: null,        // this user's row in profiles (null = full access)
   view: { name: "home" },
   // Remembered navigation state so Back returns exactly where you were.
-  ui: { openIng: new Set(), openDish: new Set(), openStock: new Set(), homeScroll: 0 },
+  ui: { openIng: new Set(), openDish: new Set(), openStock: new Set(),
+        openSauce: false, homeScroll: 0 },
 };
 let draft = null;
 
@@ -542,7 +543,13 @@ function renderHome() {
           <span class="card-title">${esc(t("sauces"))}</span>
           <span class="count num">${state.sauces.length} ${esc(t("items"))}</span>
         </div>
-        ${state.sauces.length ? sauceRows : `<p class="empty">${esc(t("no_sauces"))}</p>`}
+        ${state.sauces.length ? `<details class="group" id="sauceGroup" ${state.ui.openSauce ? "open" : ""}>
+          <summary>
+            <span>${esc(t("all_sauces"))}</span>
+            <span class="gright"><span class="badge num">${state.sauces.length}</span><span class="chev">›</span></span>
+          </summary>
+          ${sauceRows}
+        </details>` : `<p class="empty">${esc(t("no_sauces"))}</p>`}
         <div class="card-foot"><button class="btn ghost small" id="btnAddSauce">${esc(t("add_sauce"))}</button></div>
       </div>` : ""}
 
@@ -567,6 +574,8 @@ function renderHome() {
       else state.ui.openIng.delete(d.dataset.ingCat);
     });
   });
+  const sg = document.getElementById("sauceGroup");
+  if (sg) sg.addEventListener("toggle", () => { state.ui.openSauce = sg.open; });
   $app.querySelectorAll("details[data-dish-cat]").forEach((d) => {
     d.addEventListener("toggle", () => {
       if (d.open) state.ui.openDish.add(d.dataset.dishCat);
