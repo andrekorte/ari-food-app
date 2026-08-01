@@ -502,6 +502,9 @@ function renderLogin(errorMsg) {
       <p class="center" style="margin-top:0.8rem">
         <button class="chipbtn" id="btnLangLogin">${LANG === "en" ? "ไทย" : "EN"}</button>
       </p>
+      <p class="center muted" style="margin-top:1rem; font-size:0.72rem">
+        ${esc(window.APP_VERSION || "dev")}
+      </p>
     </div>`;
   document.getElementById("btnLangLogin").onclick = () => { toggleLang(); renderLogin(errorMsg); };
   document.getElementById("btnForgot").onclick = async () => {
@@ -2001,6 +2004,29 @@ function renderDish(id, existingDraft) {
   updateTotals();
 }
 
+/* ---------- automatic updates ---------- */
+
+// Check once at launch, in the background, whether a newer build has been
+// published. GitHub Pages caches index.html for 10 minutes, so without
+// this a phone can keep running an old copy long after an update.
+async function checkForUpdate() {
+  // Never interrupt an invite / password-reset link — its tokens live in
+  // the URL fragment and would be lost by a reload.
+  if (authLinkType()) return;
+  try {
+    const r = await fetch("version.json?t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) return;
+    const { version } = await r.json();
+    if (!version || version === window.APP_VERSION) return;
+    // Guard against a reload loop if the new copy still reports the old id.
+    if (sessionStorage.getItem("arifood_updated_to") === version) return;
+    sessionStorage.setItem("arifood_updated_to", version);
+    location.replace(location.pathname + "?v=" + encodeURIComponent(version));
+  } catch (_e) {
+    /* offline or blocked — keep running the current version */
+  }
+}
+
 /* ---------- boot ---------- */
 
 function renderConfigMissing() {
@@ -2027,6 +2053,8 @@ async function init() {
     renderConfigMissing();
     return;
   }
+  checkForUpdate();   // background, never awaited
+
   db = window.supabase.createClient(APP_CONFIG.SUPABASE_URL, APP_CONFIG.SUPABASE_ANON_KEY);
 
   // An invite or password-reset link lands here with tokens in the URL.
