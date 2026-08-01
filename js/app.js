@@ -52,6 +52,8 @@ const DISH_CATS = [
   "drinks", "dessert", "snacks", "special", "other",
 ];
 const SITES = ["ari", "yindee", "sayhi"];
+// Least access first, so the segmented control reads left to right.
+const ROLES = ["shopper", "manager", "admin"];
 
 // Professional line-style SVG icons (stroke follows currentColor).
 const I = (path) =>
@@ -133,9 +135,23 @@ function userName() {
   return meta.display_name || meta.full_name || session.user.email.split("@")[0];
 }
 
-// A user without a profiles row has full access (matches the RLS rules).
+// Three access levels:
+//   admin    everything, including adding and removing users
+//   manager  everything except users
+//   shopper  purchases and stock only
+// A user without a profiles row has full access, matching the RLS rules.
+function role() {
+  return state.profile ? state.profile.role : "admin";
+}
+
+// May edit the recipe book: ingredients, sauces, dishes and prices.
 function isAdmin() {
-  return !state.profile || state.profile.role === "admin";
+  return role() === "admin" || role() === "manager";
+}
+
+// May add, remove and change users. Admins only.
+function canManageUsers() {
+  return role() === "admin";
 }
 
 function sortedPurchases(ing) {
@@ -493,8 +509,12 @@ async function render() {
     }
   }
   const v = state.view;
-  const adminOnly = ["ingredient", "dish", "sauce", "users", "user"];
-  if (!isAdmin() && adminOnly.includes(v.name)) {
+  const editorOnly = ["ingredient", "dish", "sauce"];
+  if (!isAdmin() && editorOnly.includes(v.name)) {
+    state.view = { name: "home" };
+    return renderHome();
+  }
+  if (!canManageUsers() && (v.name === "users" || v.name === "user")) {
     state.view = { name: "home" };
     return renderHome();
   }
@@ -551,7 +571,7 @@ function tabbar(active) {
     <button class="tab ${active === "stock" ? "active" : ""}" id="tabStock">
       <span class="ticon">${ICONS.stock}</span>${esc(t("tab_stock"))}
     </button>
-    ${isAdmin() ? `<button class="tab ${active === "users" ? "active" : ""}" id="tabUsers">
+    ${canManageUsers() ? `<button class="tab ${active === "users" ? "active" : ""}" id="tabUsers">
       <span class="ticon">${ICONS.users}</span>${esc(t("tab_users"))}
     </button>` : ""}
   </div></nav>`;
@@ -1949,9 +1969,10 @@ function openAddUser() {
       <div class="field">
         <label>${esc(t("role"))}</label>
         <div class="seg" id="auRole">
-          <button type="button" class="segbtn active" data-role="shopper">${esc(t("role_shopper"))}</button>
-          <button type="button" class="segbtn" data-role="admin">${esc(t("role_admin"))}</button>
+          ${ROLES.map((r) => `<button type="button" class="segbtn ${r === "shopper" ? "active" : ""}"
+            data-role="${r}">${esc(t("role_" + r))}</button>`).join("")}
         </div>
+        <p class="muted" style="margin:0.4rem 0 0; font-size:0.8rem">${esc(t("role_hint"))}</p>
       </div>
       <div class="error-box bad" id="auErr" style="display:none"></div>
       <button class="btn" id="auSend">${esc(t("send_invite"))}</button>
@@ -2149,8 +2170,8 @@ function renderUser(id) {
       <div class="field">
         <label>${esc(t("role"))}</label>
         <div class="seg" id="uRole">
-          <button type="button" class="segbtn ${u.role === "shopper" ? "active" : ""}" data-role="shopper">${esc(t("role_shopper"))}</button>
-          <button type="button" class="segbtn ${u.role === "admin" ? "active" : ""}" data-role="admin">${esc(t("role_admin"))}</button>
+          ${ROLES.map((r) => `<button type="button" class="segbtn ${u.role === r ? "active" : ""}"
+            data-role="${r}">${esc(t("role_" + r))}</button>`).join("")}
         </div>
         <p class="muted" style="margin:0.4rem 0 0; font-size:0.8rem">${esc(t("role_hint"))}</p>
       </div>

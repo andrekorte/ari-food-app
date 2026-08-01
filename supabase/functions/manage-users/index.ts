@@ -13,6 +13,12 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// admin = everything including users, manager = everything except users,
+// shopper = purchases and stock only. Anything unrecognised is a shopper.
+const ROLES = ["admin", "manager", "shopper"];
+const asRole = (v: unknown) =>
+  ROLES.includes(String(v)) ? String(v) : "shopper";
+
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -101,7 +107,7 @@ Deno.serve(async (req) => {
 
     if (action === "invite") {
       const email = String(body.email || "").trim().toLowerCase();
-      const role = body.role === "admin" ? "admin" : "shopper";
+      const role = asRole(body.role);
       const name = String(body.display_name || "").trim();
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
         return json({ error: "That doesn't look like an email address." }, 400);
@@ -162,7 +168,7 @@ Deno.serve(async (req) => {
 
     if (action === "set_role") {
       const id = String(body.user_id || "");
-      const role = body.role === "admin" ? "admin" : "shopper";
+      const role = asRole(body.role);
       if (id === me.user.id && role !== "admin") {
         return json({ error: "You can't remove your own admin access." }, 400);
       }

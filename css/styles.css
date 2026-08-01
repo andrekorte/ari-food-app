@@ -218,6 +218,7 @@ details.group summary .gright {
 }
 /* Access level on the Users tab. */
 .badge.role-admin { background: var(--chrome); color: var(--yellow); }
+.badge.role-manager { background: var(--yellow); color: #291b1b; }
 .badge.role-shopper { background: var(--field); color: var(--muted); border: 1px solid var(--line); }
 /* Invited but hasn't chosen a password yet. */
 .pill {
@@ -445,7 +446,9 @@ h2.ptitle { margin: 0.2rem 0 1rem; font-size: 1.35rem; }
 }
 
 /* ---- Site selector (segmented) ---- */
-.seg { display: flex; gap: 0.5rem; }
+/* Three access levels: let them wrap rather than squeeze on a narrow phone. */
+.seg { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.seg .segbtn { flex: 1 1 28%; }
 .segbtn {
   flex: 1; background: var(--panel); border: 1.5px solid var(--line);
   border-radius: 13px; padding: 0.65rem 0.4rem; min-height: 50px;
