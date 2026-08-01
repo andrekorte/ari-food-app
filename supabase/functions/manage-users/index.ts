@@ -127,6 +127,39 @@ Deno.serve(async (req) => {
       return json({ ok: true, id: data.user.id });
     }
 
+    if (action === "set_name") {
+      const id = String(body.user_id || "");
+      const name = String(body.display_name || "").trim();
+      if (!name) return json({ error: "The name can't be empty." }, 400);
+
+      const { data: prof } = await admin
+        .from("profiles").select("display_name").eq("user_id", id).maybeSingle();
+      const old = prof?.display_name || null;
+
+      const { error } = await admin.from("profiles")
+        .upsert({ user_id: id, display_name: name }, { onConflict: "user_id" });
+      if (error) throw error;
+      // Keep the login's own metadata in step, so a fresh sign-in agrees.
+      await admin.auth.admin.updateUserById(id, { user_metadata: { display_name: name } });
+
+      // Past entries were signed with whatever name was in use at the time.
+      // Relabel them so one person reads as one person throughout.
+      let relabelled = 0;
+      if (body.relabel !== false && old && old !== name) {
+        const targets: [string, string][] = [
+          ["purchases", "entered_by"],
+          ["stock_changes", "changed_by"],
+          ["change_log", "changed_by"],
+        ];
+        for (const [table, col] of targets) {
+          const { count, error: upErr } = await admin.from(table)
+            .update({ [col]: name }, { count: "exact" }).eq(col, old);
+          if (!upErr) relabelled += count || 0;
+        }
+      }
+      return json({ ok: true, relabelled });
+    }
+
     if (action === "set_role") {
       const id = String(body.user_id || "");
       const role = body.role === "admin" ? "admin" : "shopper";

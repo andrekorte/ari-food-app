@@ -2140,6 +2140,13 @@ function renderUser(id) {
       </div>
 
       <div class="field">
+        <label for="uName">${esc(t("display_name"))}</label>
+        <input type="text" id="uName" value="${esc(u.display_name || "")}"
+          placeholder="${esc(t("display_name_hint"))}">
+        <button class="btn ghost small" id="btnSaveName" style="margin-top:0.5rem">${esc(t("save_name"))}</button>
+      </div>
+
+      <div class="field">
         <label>${esc(t("role"))}</label>
         <div class="seg" id="uRole">
           <button type="button" class="segbtn ${u.role === "shopper" ? "active" : ""}" data-role="shopper">${esc(t("role_shopper"))}</button>
@@ -2161,6 +2168,32 @@ function renderUser(id) {
   wireHeader();
   const back = document.getElementById("btnBack");
   if (back) back.onclick = () => go({ name: "users" });
+
+  const nameBtn = document.getElementById("btnSaveName");
+  nameBtn.onclick = async () => {
+    const name = document.getElementById("uName").value.trim();
+    if (!name || name === u.display_name) return;
+    nameBtn.disabled = true;
+    try {
+      const res = await usersCall("set_name", { user_id: u.id, display_name: name });
+      u.display_name = name;
+      // Their old entries were relabelled, so reload anything showing names.
+      resetFeed(feeds.purchases);
+      resetFeed(feeds.stock);
+      resetFeed(feeds.changes);
+      userActivity = { forId: null, rows: null, shown: HISTORY_PAGE, limit: 0, done: false };
+      if (u.is_self) { state.profileFetched = false; dataFresh = false; }
+      go({ name: "user", id: u.id });
+      showToast(
+        t("name_saved").replace("{name}", name),
+        res && res.relabelled ? t("name_relabelled").replace("{n}", res.relabelled) : ""
+      );
+      return;
+    } catch (e) {
+      console.error(e); alert(e.message || t("save_failed"));
+    }
+    nameBtn.disabled = false;
+  };
 
   $app.querySelectorAll("#uRole .segbtn").forEach((b) => {
     b.onclick = async () => {
