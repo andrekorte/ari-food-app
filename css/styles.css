@@ -105,6 +105,7 @@ h2, .brand, .card-title, .login-logo .name, .htitle {
 .content {
   padding: 1rem 0.9rem calc(94px + env(safe-area-inset-bottom));
 }
+.content.has-savebar { padding-bottom: calc(168px + env(safe-area-inset-bottom)); }
 .content.no-tabs { padding-bottom: calc(2.2rem + env(safe-area-inset-bottom)); }
 
 /* ---- Login ---- */
@@ -508,4 +509,20 @@ h2.ptitle { margin: 0.2rem 0 1rem; font-size: 1.35rem; }
 .toast .tbody span { font-size: 0.88rem; opacity: 0.9; }
 @media (prefers-reduced-motion: reduce) {
   .toast { transition: opacity 200ms ease; transform: translate(-50%, 0); }
+}
+
+/* ---- Floating save bar (Stock screen) ---- */
+.savebar {
+  position: fixed; left: 0; right: 0; z-index: 40;
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  padding: 0 0.9rem;
+  display: flex; justify-content: center;
+  transform: translateY(140%);
+  transition: transform 220ms ease;
+  pointer-events: none;
+}
+.savebar.in { transform: translateY(0); pointer-events: auto; }
+.savebar .btn { max-width: 620px; margin: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .savebar { transition: none; }
 }

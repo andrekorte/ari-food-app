@@ -1267,15 +1267,16 @@ function renderStock(existingDraft) {
 
   $app.innerHTML = `
     ${header({ title: t("tab_stock") })}
-    <main class="content">
+    <main class="content has-savebar">
       ${state.stockMissing
         ? `<div class="error-box">${esc(t("stock_migration_needed"))}</div>`
         : `<p class="muted" style="margin:0.2rem 0 0.8rem; font-size:0.85rem">${esc(t("stock_hint"))}</p>
-      <button class="btn" id="btnStSave" disabled>${esc(t("save_changes"))}</button>
-      <div style="height:0.6rem"></div>
       <div class="card">${sections}</div>
       <div class="calc" id="stockValue"></div>`}
     </main>
+    <div class="savebar" id="stSaveBar">
+      <button class="btn" id="btnStSave">${esc(t("save_changes"))}</button>
+    </div>
     ${tabbar("stock")}`;
 
   wireHeader();
@@ -1311,9 +1312,12 @@ function renderStock(existingDraft) {
   };
 
   const saveBtn = document.getElementById("btnStSave");
+  const saveBar = document.getElementById("stSaveBar");
   const updateSaveBtn = () => {
     const n = Object.keys(draft.edits).length;
-    saveBtn.disabled = n === 0;
+    // The bar only exists while there is something to save, and floats
+    // above the tab bar so it stays reachable anywhere in the list.
+    saveBar.classList.toggle("in", n > 0);
     saveBtn.textContent = n ? `${t("save_changes")} (${n})` : t("save_changes");
   };
 
