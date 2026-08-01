@@ -213,6 +213,15 @@ details.group summary .gright {
   border-radius: 999px; font-size: 0.82rem; font-weight: 700;
   padding: 0.16rem 0.66rem; min-width: 1.9rem; text-align: center;
 }
+/* What kind of edit a change-history row records. */
+.badge.act-created { background: #1f7a4d; color: #fff; }
+.badge.act-updated { background: var(--yellow); color: #291b1b; }
+.badge.act-deleted { background: var(--red); color: #fff; }
+
+/* A history block is one collapsed row; its contents load on first tap. */
+.hbody > details.group:first-child { border-top: none; }
+.hbody > .btn.ghost.small { margin: 0.5rem 0.7rem 0.7rem; width: calc(100% - 1.4rem); }
+
 details.group summary .chev { transition: transform 150ms ease; color: var(--muted); font-size: 1.15rem; }
 details.group[open] summary .chev { transform: rotate(90deg); }
 

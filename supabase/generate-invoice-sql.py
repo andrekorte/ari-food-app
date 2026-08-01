@@ -196,14 +196,15 @@ w("-- 10. Opening prices from the invoices ----------------------------")
 w("-- Each ingredient's most recent invoice line, so dish costs and")
 w("-- margins work from day one. No wastage recorded — add it per")
 w("-- ingredient in the app where prep loss matters.")
-w("insert into public.purchases (ingredient_id, purchased_kg, price_paid, wastage_kg, purchased_at, entered_by)")
+w("insert into public.purchases (ingredient_id, purchased_kg, price_paid, wastage_kg, purchased_at, entered_by, note)")
 w("select * from (values")
 vals = []
 for key, qty, price, date, note in BUY:
     vals.append(f"  ((select id from public.ingredients where name = {q(ING[key][0])}), "
-                f"{qty}, {price}, 0, timestamptz {q(date + ' 09:00+10')}, {q('invoice: ' + note)})")
+                f"{qty}, {price}, 0, timestamptz {q(date + ' 09:00+10')}, "
+                f"'Set-up import', {q(note)})")
 w(",\n".join(vals))
-w(") as v(ingredient_id, purchased_kg, price_paid, wastage_kg, purchased_at, entered_by)")
+w(") as v(ingredient_id, purchased_kg, price_paid, wastage_kg, purchased_at, entered_by, note)")
 w("where v.ingredient_id is not null;")
 
 open("/tmp/claude-0/-home-user-excercise-app/59585d0f-b213-557e-822e-98372ef79416/scratchpad/invoice_part.sql", "w").write("\n".join(out) + "\n")

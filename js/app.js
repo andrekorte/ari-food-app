@@ -14,6 +14,15 @@
 
 let db = null;
 let session = null;
+
+// History screens load a page at a time. Nothing older is fetched until the
+// user taps "Load more", so history can grow for years without ever costing
+// the app anything at launch.
+const HISTORY_PAGE = 10;
+// Rows to pull per page of grouped entries — a saved basket or stocktake is
+// well under this many lines, so one fetch covers a full page of entries.
+const ROWS_PER_ENTRY = 30;
+
 const state = {
   ingredients: [],
   dishes: [],
@@ -23,8 +32,6 @@ const state = {
   stockMissing: false,  // stock migration not run yet
   proteins: [],         // customer protein choices (chicken, pork, …)
   aliases: [],          // learned invoice wordings -> ingredient
-  stockChanges: null,   // loaded lazily, only when the Stock screen opens
-  stockChangesMissing: false,
   profile: null,        // this user's row in profiles (null = full access)
   view: { name: "home" },
   // Remembered navigation state so Back returns exactly where you were.
@@ -142,8 +149,18 @@ function purchaseStats(p) {
   return { usable, perBig, perSmall: perBig / 1000 };
 }
 
+// The current price lives on the ingredient row itself, kept up to date by
+// the database whenever a purchase is recorded. That way the app never has
+// to load purchase history just to cost a dish. Before that migration is
+// run the column is absent and we fall back to the purchases we loaded.
 function ingredientStats(ing) {
-  return purchaseStats(sortedPurchases(ing)[0]);
+  if (!ing) return null;
+  if (ing.unit_price != null && Number(ing.usable_qty) > 0) {
+    const perBig = Number(ing.unit_price);
+    return { usable: Number(ing.usable_qty), perBig, perSmall: perBig / 1000 };
+  }
+  if (ing.purchases) return purchaseStats(sortedPurchases(ing)[0]);
+  return null;
 }
 
 function findIngredient(id) {
@@ -253,6 +270,115 @@ function showToast(title, detail) {
   }, 4500);
 }
 
+/* ---------- paged history feeds ---------- */
+
+// Every history list in the app (purchases, stock changes, edits) works the
+// same way: nothing is fetched at launch, the screen paints first, then one
+// page of entries is loaded in the background. Older entries are only ever
+// fetched when the user taps "Load more", so these lists cannot slow the app
+// down as history builds up over the years.
+// `grouped` feeds have many rows per entry (a basket, a stocktake); the
+// edit log has exactly one row per entry, so it fetches far fewer rows.
+function makeFeed(table, tsCol, grouped) {
+  return {
+    table, tsCol, grouped,
+    rowsPer: grouped ? ROWS_PER_ENTRY : 1,
+    rows: null,      // rows loaded so far, newest first
+    limit: 0,        // how many rows the last fetch asked for
+    done: false,     // true once we've reached the oldest row
+    missing: false,  // table not there yet (migration not run)
+    shown: HISTORY_PAGE,
+  };
+}
+
+const feeds = {
+  purchases: makeFeed("purchases", "purchased_at", true),
+  stock: makeFeed("stock_changes", "changed_at", true),
+  changes: makeFeed("change_log", "changed_at", false),
+};
+
+async function loadFeed(feed, entries) {
+  const want = Math.max(entries, HISTORY_PAGE) * feed.rowsPer;
+  if (feed.rows && (feed.done || feed.limit >= want)) return;
+  const { data, error } = await db.from(feed.table).select("*")
+    .order(feed.tsCol, { ascending: false }).limit(want);
+  if (error) {
+    console.error(feed.table + " history unavailable:", error);
+    feed.rows = []; feed.done = true; feed.missing = true;
+    return;
+  }
+  feed.rows = data;
+  feed.limit = want;
+  feed.done = data.length < want;
+  feed.missing = false;
+}
+
+function resetFeed(feed) {
+  feed.rows = null; feed.limit = 0; feed.done = false; feed.shown = HISTORY_PAGE;
+}
+
+// Group a feed's rows into the saves they came from, newest first. When the
+// page was cut off mid-save the oldest group may be missing lines, so it is
+// held back until the next page is loaded.
+function feedEntries(feed, keyOf, build) {
+  const groups = new Map();
+  for (const r of feed.rows || []) {
+    const key = keyOf(r);
+    if (!groups.has(key)) groups.set(key, { ...build(r, key), key, at: r[feed.tsCol], rows: [] });
+    const g = groups.get(key);
+    g.rows.push(r);
+    if (new Date(r[feed.tsCol]) > new Date(g.at)) g.at = r[feed.tsCol];
+  }
+  const list = [...groups.values()].sort((a, b) => new Date(b.at) - new Date(a.at));
+  if (feed.grouped && !feed.done && list.length > 1) list.pop();
+  return list;
+}
+
+// "Load more" appears only while there is more to show or more to fetch.
+function moreBtn(feed, total) {
+  if (feed.shown >= total && feed.done) return "";
+  return `<button class="btn ghost small" data-load-more>${esc(t("load_more"))}</button>`;
+}
+
+// Build a history block: a single collapsed row that fetches its first page
+// the first time it is tapped. Left closed, it costs nothing at all.
+function mountHistory(containerId, feed, label, entriesHtml) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = `<p class="section-label">${esc(label)}</p>
+    <div class="card">
+      <details class="group">
+        <summary>
+          <span>${esc(t("show_history"))}</span>
+          <span class="gright"><span class="chev">›</span></span>
+        </summary>
+        <div class="hbody"><p class="empty" style="border:none">${esc(t("loading"))}</p></div>
+      </details>
+    </div>`;
+
+  const det = el.querySelector("details");
+  const body = el.querySelector(".hbody");
+  const paint = () => {
+    body.innerHTML = entriesHtml();
+    const btn = body.querySelector("[data-load-more]");
+    if (btn) btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = t("loading");
+      feed.shown += HISTORY_PAGE;
+      await loadFeed(feed, feed.shown);
+      paint();
+    };
+  };
+
+  let loaded = false;
+  det.addEventListener("toggle", async () => {
+    if (!det.open || loaded) return;
+    loaded = true;
+    await loadFeed(feed, feed.shown);
+    paint();
+  });
+}
+
 /* ---------- data ---------- */
 
 // Data is cached in memory so every tap renders instantly. A fetch only
@@ -264,7 +390,9 @@ let lastRefreshAt = 0;
 
 async function refreshData() {
   const jobs = [
-    db.from("ingredients").select("*, purchases(*)").order("name"),
+    // Prices come from the ingredient row (see ingredientStats) — purchase
+    // history is never loaded at launch, only when a screen asks for it.
+    db.from("ingredients").select("*").order("name"),
     db.from("dishes").select("*, dish_ingredients(*)").order("name"),
     // sauce_ingredients links to sauces twice (sauce_id and sub_sauce_id),
     // which makes an embedded select ambiguous — fetch the rows separately
@@ -284,6 +412,13 @@ async function refreshData() {
   if (dishes.error) throw dishes.error;
   state.ingredients = ings.data;
   state.dishes = dishes.data;
+
+  // Before the price-cache migration is run there is no unit_price column,
+  // so fall back to the old (slower) way rather than showing no prices.
+  if (ings.data.length && !("unit_price" in ings.data[0])) {
+    const back = await db.from("ingredients").select("*, purchases(*)").order("name");
+    if (!back.error) state.ingredients = back.data;
+  }
 
   // Sauces arrive with a later migration — degrade gracefully without it.
   if (sauces.error || sauceRows.error) {
@@ -359,7 +494,8 @@ async function render() {
     state.view = { name: "home" };
     return renderHome();
   }
-  if (v.name === "ingredient") renderIngredient(v.id);
+  // Only this one ingredient's purchases are loaded, and only here.
+  if (v.name === "ingredient") { await loadPurchasesFor(v.id); renderIngredient(v.id); }
   else if (v.name === "dish") renderDish(v.id);
   else if (v.name === "sauce") renderSauce(v.id);
   else if (v.name === "basket") renderBasket();
@@ -653,11 +789,14 @@ function renderHome() {
         ${state.dishes.length ? dishSections : `<p class="empty">${esc(t("no_dishes"))}</p>`}
         <div class="card-foot"><button class="btn ghost small" id="btnAddDish">${esc(t("add_dish"))}</button></div>
       </div>` : ""}
+
+      ${admin ? `<div id="changeHistory"></div>` : ""}
     </main>
     ${tabbar("home")}`;
 
   wireHeader();
   wireTabbar();
+  if (admin) mountHistory("changeHistory", feeds.changes, t("change_history"), changeHistoryHtml);
 
   // Remember which sections are open across navigation.
   $app.querySelectorAll("details[data-ing-cat]").forEach((d) => {
@@ -700,6 +839,7 @@ function renderHome() {
         alert(error.code === "23503" ? t("ing_in_use") : t("save_failed"));
         return;
       }
+      resetFeed(feeds.changes);
       dataFresh = false;
       render();
     };
@@ -875,29 +1015,44 @@ function rowSuffix(row) {
 
 // The batch columns arrive with a later migration; without them the app
 // still groups a basket by the timestamp its rows were written with.
-function hasPurchaseBatches() {
-  for (const ing of state.ingredients)
-    for (const p of ing.purchases || []) return "batch_id" in p;
-  return false;
+// Asked once per session, from the database itself.
+let batchCols = null;
+async function hasPurchaseBatches() {
+  if (batchCols === null) {
+    const r = await db.from("purchases").select("batch_id").limit(1);
+    batchCols = !r.error;
+  }
+  return batchCols;
 }
 
 // Every saved basket, newest first: {key, at, site, rows[], total}
 function purchaseBatches() {
-  const groups = new Map();
-  for (const ing of state.ingredients) {
-    for (const p of ing.purchases || []) {
-      const key = p.batch_id || new Date(p.purchased_at).toISOString();
-      if (!groups.has(key)) {
-        groups.set(key, { key, at: p.purchased_at, site: p.site || null, rows: [], total: 0 });
-      }
-      const g = groups.get(key);
-      g.rows.push({ ...p, ing });
-      g.total += Number(p.price_paid) || 0;
-      if (!g.site && p.site) g.site = p.site;
-      if (new Date(p.purchased_at) > new Date(g.at)) g.at = p.purchased_at;
-    }
-  }
-  return [...groups.values()].sort((a, b) => new Date(b.at) - new Date(a.at));
+  return feedEntries(
+    feeds.purchases,
+    (p) => p.batch_id || new Date(p.purchased_at).toISOString(),
+    (p) => ({ site: p.site || null })
+  ).map((g) => ({
+    ...g,
+    site: g.site || (g.rows.find((r) => r.site) || {}).site || null,
+    total: g.rows.reduce((sum, r) => sum + (Number(r.price_paid) || 0), 0),
+  }));
+}
+
+// Who saved this basket. The opening invoices loaded during setup carried
+// their invoice description in this column; the note migration moves that
+// text to purchases.note, but never show it as if it were a person's name.
+function enteredBy(b) {
+  const row = b.rows.find((r) => r.entered_by && !/^invoice:/i.test(r.entered_by));
+  return row ? row.entered_by : t("setup_import");
+}
+
+// One ingredient's own purchase history, fetched only when its editor opens.
+async function loadPurchasesFor(id) {
+  const ing = id ? findIngredient(id) : null;
+  if (!ing || ing.purchases) return;
+  const { data, error } = await db.from("purchases").select("*")
+    .eq("ingredient_id", id).order("purchased_at", { ascending: false });
+  ing.purchases = error ? [] : data;
 }
 
 function dateTimeShort(iso) {
@@ -1061,41 +1216,43 @@ function scanItemToRow(item) {
 
 // Past purchases: one collapsible row per basket, newest first.
 function historyHtml() {
-  const batches = purchaseBatches().slice(0, 25);
-  if (!batches.length) return "";
-  return `<p class="section-label">${esc(t("purchase_history"))}</p>
-    <div class="card">
-      ${batches.map((b) => `<details class="group">
-        <summary>
-          <span>${esc(dateTimeShort(b.at))}${b.site ? ` · ${esc(t("site_" + b.site))}` : ""}</span>
-          <span class="gright">
-            <span class="badge num">${money(b.total)}</span><span class="chev">›</span>
-          </span>
-        </summary>
-        <div class="scroll-x" style="padding:0.3rem 0.6rem">
-          <table class="list">
-            <thead><tr>
-              <th>${esc(t("ingredient"))}</th>
-              <th class="num">${esc(t("amount"))}</th>
-              <th class="num">${esc(t("price"))}</th>
-            </tr></thead>
-            <tbody class="num">
-              ${b.rows.map((r) => {
-                const u = unitOf(r.ing);
-                return `<tr>
-                  <td>${esc(dName(r.ing))}</td>
-                  <td class="num">${fmtQty(r.purchased_kg)} ${esc(u.big)}</td>
-                  <td class="num">${money(r.price_paid)}</td>
-                </tr>`;
-              }).join("")}
-            </tbody>
-          </table>
-        </div>
-        <p class="empty" style="border:none; font-size:0.8rem">
-          ${esc(t("entered_by"))}: ${esc(b.rows[0].entered_by || "–")}
-        </p>
-      </details>`).join("")}
-    </div>`;
+  const all = purchaseBatches();
+  const batches = all.slice(0, feeds.purchases.shown);
+  if (!batches.length) {
+    return `<p class="empty" style="border:none">${esc(t("no_purchases"))}</p>`;
+  }
+  return batches.map((b) => `<details class="group">
+      <summary>
+        <span>${esc(dateTimeShort(b.at))}${b.site ? ` · ${esc(t("site_" + b.site))}` : ""}</span>
+        <span class="gright">
+          <span class="badge num">${money(b.total)}</span><span class="chev">›</span>
+        </span>
+      </summary>
+      <p class="empty" style="border:none; font-size:0.8rem; padding-bottom:0">
+        ${esc(t("entered_by"))}: ${esc(enteredBy(b))}
+      </p>
+      <div class="scroll-x" style="padding:0.3rem 0.6rem">
+        <table class="list">
+          <thead><tr>
+            <th>${esc(t("ingredient"))}</th>
+            <th class="num">${esc(t("amount"))}</th>
+            <th class="num">${esc(t("price"))}</th>
+          </tr></thead>
+          <tbody class="num">
+            ${b.rows.map((r) => {
+              const ing = findIngredient(r.ingredient_id);
+              const u = unitOf(ing || {});
+              return `<tr>
+                <td>${esc(ing ? dName(ing) : "?")}${
+                  r.note ? `<br><span class="muted" style="font-size:0.75rem">${esc(r.note)}</span>` : ""}</td>
+                <td class="num">${fmtQty(r.purchased_kg)} ${esc(u.big)}</td>
+                <td class="num">${money(r.price_paid)}</td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </details>`).join("") + moreBtn(feeds.purchases, all.length);
 }
 
 function renderBasket(existingDraft) {
@@ -1145,12 +1302,13 @@ function renderBasket(existingDraft) {
       </div>
       <button class="btn" id="btnSave">${esc(t("save_all"))}</button>
 
-      ${historyHtml()}
+      <div id="purchaseHistory"></div>
     </main>
     ${tabbar("basket")}`;
 
   wireHeader();
   wireTabbar();
+  mountHistory("purchaseHistory", feeds.purchases, t("purchase_history"), historyHtml);
 
   const captureDraft = () => {
     $app.querySelectorAll("[data-b-qty]").forEach((inp) => {
@@ -1268,7 +1426,7 @@ function renderBasket(existingDraft) {
       // Learn every scanned wording that ended up assigned to an ingredient.
       await Promise.all(valid.filter((r) => r.scanLabel)
         .map((r) => learnAlias(r.scanLabel, r.id)));
-      const batch = hasPurchaseBatches() && crypto.randomUUID ? crypto.randomUUID() : null;
+      const batch = (await hasPurchaseBatches()) && crypto.randomUUID ? crypto.randomUUID() : null;
       const { error } = await db.from("purchases").insert(valid.map((r) => ({
         ingredient_id: r.id,
         purchased_kg: Number(r.qty),
@@ -1278,6 +1436,7 @@ function renderBasket(existingDraft) {
         ...(batch ? { batch_id: batch, site: draft.site } : {}),
       })));
       if (error) throw error;
+      resetFeed(feeds.purchases);
       // The bought amounts land in the chosen site's stock.
       if (!state.stockMissing) {
         const byIng = {};
@@ -1296,7 +1455,7 @@ function renderBasket(existingDraft) {
           ingredient_id: r.ingredient_id, site: r.site,
           qty_from: stockOf(r.ingredient_id, r.site), qty_to: r.qty,
         })), "purchase");
-        state.stockChanges = null;
+        resetFeed(feeds.stock);
       }
       const spent = valid.reduce((sum, r) => sum + Number(r.price), 0);
       const site = draft.site;
@@ -1316,55 +1475,25 @@ function renderBasket(existingDraft) {
 
 /* ---------- stock by site ---------- */
 
-// Change history is deliberately NOT part of the main load — it is only
-// fetched when the Stock screen is opened, and only the most recent
-// entries, so the rest of the app stays as fast as it was.
-const STOCK_HISTORY_LIMIT = 300;
-
-async function loadStockChanges(force) {
-  if (state.stockChanges && !force) return;
-  const { data, error } = await db.from("stock_changes")
-    .select("*")
-    .order("changed_at", { ascending: false })
-    .limit(STOCK_HISTORY_LIMIT);
-  if (error) {
-    state.stockChanges = [];
-    state.stockChangesMissing = true;
-    return;
-  }
-  state.stockChanges = data;
-  state.stockChangesMissing = false;
-}
-
 // Group the change rows into the saves they came from, newest first.
 function stockChangeBatches() {
-  const groups = new Map();
-  for (const c of state.stockChanges || []) {
-    const key = c.batch_id || c.changed_at;
-    if (!groups.has(key)) {
-      groups.set(key, {
-        key, at: c.changed_at, by: c.changed_by,
-        source: c.source, site: c.site, rows: [],
-      });
-    }
-    groups.get(key).rows.push(c);
-  }
-  return [...groups.values()].sort((a, b) => new Date(b.at) - new Date(a.at));
+  return feedEntries(
+    feeds.stock,
+    (c) => c.batch_id || c.changed_at,
+    (c) => ({ by: c.changed_by, source: c.source, site: c.site })
+  );
 }
 
 function stockHistoryHtml() {
-  if (state.stockChangesMissing) {
-    return `<p class="section-label">${esc(t("stock_history"))}</p>
-      <div class="error-box">${esc(t("stock_history_migration"))}</div>`;
+  if (feeds.stock.missing) {
+    return `<div class="error-box">${esc(t("stock_history_migration"))}</div>`;
   }
-  const batches = stockChangeBatches().slice(0, 40);
+  const all = stockChangeBatches();
+  const batches = all.slice(0, feeds.stock.shown);
   if (!batches.length) {
-    return `<p class="section-label">${esc(t("stock_history"))}</p>
-      <div class="card"><p class="empty" style="border:none">${esc(t("no_stock_changes"))}</p></div>`;
+    return `<p class="empty" style="border:none">${esc(t("no_stock_changes"))}</p>`;
   }
-  return `<p class="section-label">${esc(t("stock_history"))}</p>
-    <div class="card">
-      ${batches.map((b) => `<details class="group">
+  return batches.map((b) => `<details class="group">
         <summary>
           <span>${esc(dateTimeShort(b.at))} · ${esc(b.by || "–")}</span>
           <span class="gright">
@@ -1394,8 +1523,61 @@ function stockHistoryHtml() {
             </tbody>
           </table>
         </div>
-      </details>`).join("")}
-    </div>`;
+      </details>`).join("") + moreBtn(feeds.stock, all.length);
+}
+
+/* ---------- edit history (ingredients, sauces, dishes) ---------- */
+
+// Written by database triggers, so nothing can be changed without being
+// recorded — including deletes, and changes made from another device.
+function changeEntries() {
+  return feedEntries(
+    feeds.changes,
+    (c) => c.id,                       // one entry per edit, no grouping
+    (c) => ({ by: c.changed_by, action: c.action, entity: c.entity_type })
+  );
+}
+
+function changeLabel(c) {
+  const name = c.entity_name || "?";
+  const what = t("entity_" + c.entity_type) || c.entity_type;
+  return `${what} · ${name}`;
+}
+
+function changedFieldsHtml(c) {
+  const d = c.details && typeof c.details === "object" ? c.details : null;
+  const fields = d && Array.isArray(d.fields) ? d.fields : null;
+  if (!fields || !fields.length) return "";
+  return `<p class="empty" style="border:none; font-size:0.8rem; padding-top:0">
+    ${esc(t("changed_fields"))}: ${esc(fields.map((f) => t("fld_" + f) || f).join(", "))}
+  </p>`;
+}
+
+function changeHistoryHtml() {
+  if (feeds.changes.missing) {
+    return `<div class="error-box">${esc(t("change_log_migration"))}</div>`;
+  }
+  const all = changeEntries();
+  const rows = all.slice(0, feeds.changes.shown);
+  if (!rows.length) {
+    return `<p class="empty" style="border:none">${esc(t("no_changes"))}</p>`;
+  }
+  return rows.map((e) => {
+    const c = e.rows[0];
+    return `<details class="group">
+      <summary>
+        <span>${esc(dateTimeShort(e.at))} · ${esc(e.by || "–")}</span>
+        <span class="gright">
+          <span class="badge act-${esc(c.action)}">${esc(t("act_" + c.action))}</span>
+          <span class="chev">›</span>
+        </span>
+      </summary>
+      <p class="empty" style="border:none; font-size:0.85rem; padding-bottom:0">
+        <strong>${esc(changeLabel(c))}</strong>
+      </p>
+      ${changedFieldsHtml(c)}
+    </details>`;
+  }).join("") + moreBtn(feeds.changes, all.length);
 }
 
 // Write the audit trail. Best-effort: if the history table is missing or
@@ -1623,7 +1805,7 @@ function renderStock(existingDraft) {
         ingredient_id: r.ingredient_id, site: r.site,
         qty_from: stockOf(r.ingredient_id, r.site), qty_to: r.qty,
       })), "stocktake");
-      state.stockChanges = null;   // force a refetch of the history
+      resetFeed(feeds.stock);   // force a refetch of the history
       const n = rows.length;
       await go({ name: "stock" }, { refresh: true });
       showToast(t("saved_stock").replace("{n}", n));
@@ -1636,11 +1818,8 @@ function renderStock(existingDraft) {
   updateSaveBtn();
   renderStockValue();
 
-  // Fetched in the background so the screen appears immediately.
-  loadStockChanges().then(() => {
-    const el = document.getElementById("stockHistory");
-    if (el && state.view.name === "stock") el.innerHTML = stockHistoryHtml();
-  });
+  // Collapsed, and not fetched at all until the user opens it.
+  mountHistory("stockHistory", feeds.stock, t("stock_history"), stockHistoryHtml);
 }
 
 /* ---------- ingredient editor ---------- */
@@ -1847,7 +2026,9 @@ function renderIngredient(id, existingDraft) {
           }], { onConflict: "ingredient_id,site" });
           if (st.error) throw st.error;
         }
+        resetFeed(feeds.purchases);
       }
+      resetFeed(feeds.changes);
       go({ name: "home" }, { refresh: true });
     } catch (e) {
       console.error(e); alert(t("save_failed"));
@@ -1862,6 +2043,7 @@ function renderIngredient(id, existingDraft) {
         alert(error.code === "23503" ? t("ing_in_use") : t("save_failed"));
         return;
       }
+      resetFeed(feeds.changes);
       go({ name: "home" }, { refresh: true });
     };
 
@@ -1870,6 +2052,7 @@ function renderIngredient(id, existingDraft) {
         if (!confirm(t("confirm_delete"))) return;
         const { error } = await db.from("purchases").delete().eq("id", b.dataset.delPurchase);
         if (error) { console.error(error); return alert(t("save_failed")); }
+        resetFeed(feeds.purchases);
         go({ name: "ingredient", id: ing.id }, { refresh: true });
       };
     });
@@ -2027,6 +2210,7 @@ function renderSauce(id, existingDraft) {
           .insert(rows.map((r) => ({ sauce_id: sauceId, ...r })));
         if (ins.error) throw ins.error;
       }
+      resetFeed(feeds.changes);
       go({ name: "home" }, { refresh: true });
     } catch (e) {
       console.error(e); alert(t("save_failed"));
@@ -2041,6 +2225,7 @@ function renderSauce(id, existingDraft) {
         alert(error.code === "23503" ? t("sauce_in_use") : t("save_failed"));
         return;
       }
+      resetFeed(feeds.changes);
       go({ name: "home" }, { refresh: true });
     };
   }
@@ -2268,6 +2453,7 @@ function renderDish(id, existingDraft) {
           .insert(rows.map((r) => ({ dish_id: dishId, ...r })));
         if (ins.error) throw ins.error;
       }
+      resetFeed(feeds.changes);
       go({ name: "home" }, { refresh: true });
     } catch (e) {
       console.error(e); alert(t("save_failed"));
@@ -2279,6 +2465,7 @@ function renderDish(id, existingDraft) {
       if (!confirm(t("confirm_delete"))) return;
       const { error } = await db.from("dishes").delete().eq("id", dish.id);
       if (error) { console.error(error); return alert(t("save_failed")); }
+      resetFeed(feeds.changes);
       go({ name: "home" }, { refresh: true });
     };
   }
