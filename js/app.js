@@ -664,82 +664,6 @@ function renderHome() {
       else state.ui.openIng.delete(d.dataset.ingCat);
     });
   });
-  const search = document.getElementById("stSearch");
-  const acBox = document.getElementById("stAc");
-
-  // Suggestions while typing: names beginning with what was typed come
-  // first, then names containing it. Tapping one jumps to that row.
-  const renderSuggestions = (q) => {
-    if (!acBox) return;
-    if (!q) { acBox.innerHTML = ""; acBox.classList.remove("in"); return; }
-    const starts = [], contains = [];
-    for (const ing of state.ingredients) {
-      const hay = normTxt(ing.name + " " + (ing.name_th || ""));
-      if (!hay.includes(q)) continue;
-      (hay.startsWith(q) || normTxt(dName(ing)).startsWith(q) ? starts : contains).push(ing);
-    }
-    const list = [...starts, ...contains].slice(0, 8);
-    if (!list.length) { acBox.innerHTML = ""; acBox.classList.remove("in"); return; }
-    acBox.innerHTML = list.map((ing) => {
-      const st = ingredientStats(ing);
-      const u = unitOf(ing);
-      return `<button class="acrow" data-ac="${ing.id}">
-        <span class="acname">${esc(dName(ing))}</span>
-        <span class="acsub">${esc(t("cat_" + catOf(ing)))}${st ? ` · ${money(st.perBig)}/${u.big}` : ""}</span>
-      </button>`;
-    }).join("");
-    acBox.classList.add("in");
-    acBox.querySelectorAll("[data-ac]").forEach((b) => {
-      b.onclick = () => jumpTo(b.dataset.ac);
-    });
-  };
-
-  const jumpTo = (ingId) => {
-    const ing = findIngredient(ingId);
-    if (!ing) return;
-    search.value = ing.name;
-    acBox.innerHTML = "";
-    acBox.classList.remove("in");
-    applyFilter();
-    const row = $app.querySelector(`.strow[data-ing="${ingId}"]`);
-    if (row) {
-      row.scrollIntoView({ block: "center", behavior: "smooth" });
-      row.classList.add("flash");
-      setTimeout(() => row.classList.remove("flash"), 1600);
-      const first = row.querySelector("input");
-      if (first) first.focus({ preventScroll: true });
-    }
-  };
-
-  const applyFilter = () => {
-      const q = normTxt(search.value);
-      let hits = 0;
-      $app.querySelectorAll("details[data-st-cat]").forEach((d) => {
-        let shown = 0;
-        d.querySelectorAll(".strow").forEach((r) => {
-          const match = !q || r.dataset.sname.includes(q);
-          r.style.display = match ? "" : "none";
-          if (match) shown++;
-        });
-        d.style.display = shown ? "" : "none";
-        // While searching every matching section is open; restore the
-        // remembered state when the box is cleared.
-        d.open = q ? shown > 0 : state.ui.openStock.has(d.dataset.stCat);
-        hits += shown;
-      });
-      document.getElementById("stNoMatch").style.display =
-        q && hits === 0 ? "" : "none";
-  };
-
-  if (search) {
-    search.oninput = () => {
-      applyFilter();
-      renderSuggestions(normTxt(search.value));
-    };
-    search.onblur = () => setTimeout(() => acBox.classList.remove("in"), 180);
-    search.onfocus = () => renderSuggestions(normTxt(search.value));
-  }
-
   const sg = document.getElementById("sauceGroup");
   if (sg) sg.addEventListener("toggle", () => { state.ui.openSauce = sg.open; });
   $app.querySelectorAll("details[data-dish-cat]").forEach((d) => {
@@ -1482,6 +1406,83 @@ function renderStock(existingDraft) {
     saveBar.classList.toggle("in", n > 0);
     saveBtn.textContent = n ? `${t("save_changes")} (${n})` : t("save_changes");
   };
+
+  const search = document.getElementById("stSearch");
+  const acBox = document.getElementById("stAc");
+
+  // Suggestions while typing: names beginning with what was typed come
+  // first, then names containing it. Tapping one jumps to that row.
+  const renderSuggestions = (q) => {
+    if (!acBox) return;
+    if (!q) { acBox.innerHTML = ""; acBox.classList.remove("in"); return; }
+    const starts = [], contains = [];
+    for (const ing of state.ingredients) {
+      const hay = normTxt(ing.name + " " + (ing.name_th || ""));
+      if (!hay.includes(q)) continue;
+      (hay.startsWith(q) || normTxt(dName(ing)).startsWith(q) ? starts : contains).push(ing);
+    }
+    const list = [...starts, ...contains].slice(0, 8);
+    if (!list.length) { acBox.innerHTML = ""; acBox.classList.remove("in"); return; }
+    acBox.innerHTML = list.map((ing) => {
+      const st = ingredientStats(ing);
+      const u = unitOf(ing);
+      return `<button class="acrow" data-ac="${ing.id}">
+        <span class="acname">${esc(dName(ing))}</span>
+        <span class="acsub">${esc(t("cat_" + catOf(ing)))}${st ? ` · ${money(st.perBig)}/${u.big}` : ""}</span>
+      </button>`;
+    }).join("");
+    acBox.classList.add("in");
+    acBox.querySelectorAll("[data-ac]").forEach((b) => {
+      b.onclick = () => jumpTo(b.dataset.ac);
+    });
+  };
+
+  const jumpTo = (ingId) => {
+    const ing = findIngredient(ingId);
+    if (!ing) return;
+    search.value = ing.name;
+    acBox.innerHTML = "";
+    acBox.classList.remove("in");
+    applyFilter();
+    const row = $app.querySelector(`.strow[data-ing="${ingId}"]`);
+    if (row) {
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+      row.classList.add("flash");
+      setTimeout(() => row.classList.remove("flash"), 1600);
+      const first = row.querySelector("input");
+      if (first) first.focus({ preventScroll: true });
+    }
+  };
+
+  const applyFilter = () => {
+      const q = normTxt(search.value);
+      let hits = 0;
+      $app.querySelectorAll("details[data-st-cat]").forEach((d) => {
+        let shown = 0;
+        d.querySelectorAll(".strow").forEach((r) => {
+          const match = !q || r.dataset.sname.includes(q);
+          r.style.display = match ? "" : "none";
+          if (match) shown++;
+        });
+        d.style.display = shown ? "" : "none";
+        // While searching every matching section is open; restore the
+        // remembered state when the box is cleared.
+        d.open = q ? shown > 0 : state.ui.openStock.has(d.dataset.stCat);
+        hits += shown;
+      });
+      document.getElementById("stNoMatch").style.display =
+        q && hits === 0 ? "" : "none";
+  };
+
+  if (search) {
+    search.oninput = () => {
+      applyFilter();
+      renderSuggestions(normTxt(search.value));
+    };
+    search.onblur = () => setTimeout(() => acBox.classList.remove("in"), 180);
+    search.onfocus = () => renderSuggestions(normTxt(search.value));
+  }
+
 
   $app.querySelectorAll("details[data-st-cat]").forEach((d) => {
     d.addEventListener("toggle", () => {
