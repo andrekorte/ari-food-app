@@ -23,6 +23,8 @@ const state = {
   stockMissing: false,  // stock migration not run yet
   proteins: [],         // customer protein choices (chicken, pork, …)
   aliases: [],          // learned invoice wordings -> ingredient
+  stockChanges: null,   // loaded lazily, only when the Stock screen opens
+  stockChangesMissing: false,
   profile: null,        // this user's row in profiles (null = full access)
   view: { name: "home" },
   // Remembered navigation state so Back returns exactly where you were.
@@ -1290,6 +1292,11 @@ function renderBasket(existingDraft) {
         const st = await db.from("stock_levels")
           .upsert(stockRows, { onConflict: "ingredient_id,site" });
         if (st.error) throw st.error;
+        await recordStockChanges(stockRows.map((r) => ({
+          ingredient_id: r.ingredient_id, site: r.site,
+          qty_from: stockOf(r.ingredient_id, r.site), qty_to: r.qty,
+        })), "purchase");
+        state.stockChanges = null;
       }
       const spent = valid.reduce((sum, r) => sum + Number(r.price), 0);
       const site = draft.site;
@@ -1308,6 +1315,102 @@ function renderBasket(existingDraft) {
 }
 
 /* ---------- stock by site ---------- */
+
+// Change history is deliberately NOT part of the main load — it is only
+// fetched when the Stock screen is opened, and only the most recent
+// entries, so the rest of the app stays as fast as it was.
+const STOCK_HISTORY_LIMIT = 300;
+
+async function loadStockChanges(force) {
+  if (state.stockChanges && !force) return;
+  const { data, error } = await db.from("stock_changes")
+    .select("*")
+    .order("changed_at", { ascending: false })
+    .limit(STOCK_HISTORY_LIMIT);
+  if (error) {
+    state.stockChanges = [];
+    state.stockChangesMissing = true;
+    return;
+  }
+  state.stockChanges = data;
+  state.stockChangesMissing = false;
+}
+
+// Group the change rows into the saves they came from, newest first.
+function stockChangeBatches() {
+  const groups = new Map();
+  for (const c of state.stockChanges || []) {
+    const key = c.batch_id || c.changed_at;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key, at: c.changed_at, by: c.changed_by,
+        source: c.source, site: c.site, rows: [],
+      });
+    }
+    groups.get(key).rows.push(c);
+  }
+  return [...groups.values()].sort((a, b) => new Date(b.at) - new Date(a.at));
+}
+
+function stockHistoryHtml() {
+  if (state.stockChangesMissing) {
+    return `<p class="section-label">${esc(t("stock_history"))}</p>
+      <div class="error-box">${esc(t("stock_history_migration"))}</div>`;
+  }
+  const batches = stockChangeBatches().slice(0, 40);
+  if (!batches.length) {
+    return `<p class="section-label">${esc(t("stock_history"))}</p>
+      <div class="card"><p class="empty" style="border:none">${esc(t("no_stock_changes"))}</p></div>`;
+  }
+  return `<p class="section-label">${esc(t("stock_history"))}</p>
+    <div class="card">
+      ${batches.map((b) => `<details class="group">
+        <summary>
+          <span>${esc(dateTimeShort(b.at))} · ${esc(b.by || "–")}</span>
+          <span class="gright">
+            <span class="badge num">${b.rows.length}</span><span class="chev">›</span>
+          </span>
+        </summary>
+        <p class="empty" style="border:none; font-size:0.8rem; padding-bottom:0">
+          ${esc(b.source === "purchase" ? t("src_purchase") : t("src_stocktake"))}
+        </p>
+        <div class="scroll-x" style="padding:0.3rem 0.6rem">
+          <table class="list">
+            <thead><tr>
+              <th>${esc(t("ingredient"))}</th><th>${esc(t("site"))}</th>
+              <th class="num">${esc(t("from_to"))}</th>
+            </tr></thead>
+            <tbody class="num">
+              ${b.rows.map((c) => {
+                const ing = findIngredient(c.ingredient_id);
+                const u = unitOf(ing || {});
+                const from = c.qty_from == null ? "–" : fmtQty(c.qty_from);
+                return `<tr>
+                  <td>${esc(ing ? dName(ing) : "?")}</td>
+                  <td>${esc(t("site_" + c.site))}</td>
+                  <td class="num">${from} → <strong>${fmtQty(c.qty_to)}</strong> ${esc(u.big)}</td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      </details>`).join("")}
+    </div>`;
+}
+
+// Write the audit trail. Best-effort: if the history table is missing or
+// the insert fails, the stock save itself still stands.
+async function recordStockChanges(changes, source) {
+  if (!changes.length) return;
+  const batch = crypto.randomUUID ? crypto.randomUUID() : null;
+  try {
+    await db.from("stock_changes").insert(changes.map((c) => ({
+      ...c, batch_id: batch, source, changed_by: userName(),
+    })));
+  } catch (e) {
+    console.error("stock history not recorded:", e);
+  }
+}
 
 function stockOf(ingId, site) {
   const r = state.stock.find((x) => x.ingredient_id === ingId && x.site === site);
@@ -1358,7 +1461,8 @@ function renderStock(existingDraft) {
       <p class="empty" id="stNoMatch" style="display:none; border:none">${esc(t("no_match"))}</p>
       <div style="height:0.7rem"></div>
       <div class="card">${sections}</div>
-      <div class="calc" id="stockValue"></div>`}
+      <div class="calc" id="stockValue"></div>
+      <div id="stockHistory"></div>`}
     </main>
     <div class="savebar" id="stSaveBar">
       <button class="btn" id="btnStSave">${esc(t("save_changes"))}</button>
@@ -1515,6 +1619,11 @@ function renderStock(existingDraft) {
       const { error } = await db.from("stock_levels")
         .upsert(rows, { onConflict: "ingredient_id,site" });
       if (error) throw error;
+      await recordStockChanges(rows.map((r) => ({
+        ingredient_id: r.ingredient_id, site: r.site,
+        qty_from: stockOf(r.ingredient_id, r.site), qty_to: r.qty,
+      })), "stocktake");
+      state.stockChanges = null;   // force a refetch of the history
       const n = rows.length;
       await go({ name: "stock" }, { refresh: true });
       showToast(t("saved_stock").replace("{n}", n));
@@ -1526,6 +1635,12 @@ function renderStock(existingDraft) {
 
   updateSaveBtn();
   renderStockValue();
+
+  // Fetched in the background so the screen appears immediately.
+  loadStockChanges().then(() => {
+    const el = document.getElementById("stockHistory");
+    if (el && state.view.name === "stock") el.innerHTML = stockHistoryHtml();
+  });
 }
 
 /* ---------- ingredient editor ---------- */
