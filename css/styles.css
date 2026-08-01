@@ -511,17 +511,24 @@ h2.ptitle { margin: 0.2rem 0 1rem; font-size: 1.35rem; }
   .toast { transition: opacity 200ms ease; transform: translate(-50%, 0); }
 }
 
-/* ---- Floating save bar (Stock screen) ---- */
+/* ---- Floating save bar (Stock screen) ----
+ * Sits just above the tab bar, which stays visible at all times.
+ * Fully hidden (not merely moved) when there is nothing to save. */
 .savebar {
-  position: fixed; left: 0; right: 0; z-index: 40;
-  bottom: calc(76px + env(safe-area-inset-bottom));
+  position: fixed; left: 0; right: 0; z-index: 28;
+  bottom: calc(84px + env(safe-area-inset-bottom));
   padding: 0 0.9rem;
   display: flex; justify-content: center;
-  transform: translateY(140%);
-  transition: transform 220ms ease;
+  opacity: 0; visibility: hidden; transform: translateY(14px);
+  transition: opacity 180ms ease, transform 180ms ease,
+    visibility 0s linear 180ms;
   pointer-events: none;
 }
-.savebar.in { transform: translateY(0); pointer-events: auto; }
+.savebar.in {
+  opacity: 1; visibility: visible; transform: none;
+  transition: opacity 180ms ease, transform 180ms ease;
+  pointer-events: auto;
+}
 .savebar .btn { max-width: 620px; margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   .savebar { transition: none; }
