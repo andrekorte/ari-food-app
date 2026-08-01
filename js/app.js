@@ -398,6 +398,61 @@ function wireTabbar() {
   if (st) st.onclick = () => go({ name: "stock" });
 }
 
+/* ---------- invite & password reset ---------- */
+
+// Supabase invite and "forgot password" links come back with tokens in the
+// URL fragment. supabase-js consumes them and creates a session; we just
+// need to know which kind of link it was so we can ask for a new password.
+function authLinkType() {
+  const q = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+  if (q.get("error_description")) return { error: q.get("error_description") };
+  const type = q.get("type");
+  return ["invite", "recovery", "signup"].includes(type) ? { type } : null;
+}
+
+function clearAuthHash() {
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+}
+
+function renderSetPassword(kind, msg) {
+  $app.innerHTML = `
+    <div class="login-wrap">
+      <div class="login-logo">
+        <img src="assets/app-icon.png" alt="Ari Thai Street Food logo">
+        <div class="name">${APP_NAME}</div>
+        <div class="sub">${esc(kind === "invite" ? t("welcome") : t("tagline"))}</div>
+      </div>
+      <p class="muted" style="margin:0 0 1rem">${esc(kind === "invite" ? t("invite_hint") : t("reset_hint"))}</p>
+      ${msg ? `<div class="error-box bad">${esc(msg)}</div>` : ""}
+      <form id="pwForm">
+        <div class="field">
+          <label for="pw1">${esc(t("new_password"))}</label>
+          <input type="password" id="pw1" autocomplete="new-password" required minlength="6">
+        </div>
+        <div class="field">
+          <label for="pw2">${esc(t("repeat_password"))}</label>
+          <input type="password" id="pw2" autocomplete="new-password" required minlength="6">
+        </div>
+        <button class="btn" type="submit">${esc(t("save_password"))}</button>
+      </form>
+    </div>`;
+  document.getElementById("pwForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const a = document.getElementById("pw1").value;
+    const b = document.getElementById("pw2").value;
+    if (a.length < 6) return renderSetPassword(kind, t("pw_too_short"));
+    if (a !== b) return renderSetPassword(kind, t("pw_mismatch"));
+    const { error } = await db.auth.updateUser({ password: a });
+    if (error) { console.error(error); return renderSetPassword(kind, t("pw_failed")); }
+    clearAuthHash();
+    const { data } = await db.auth.getSession();
+    session = data.session;
+    dataFresh = false;
+    if (session) go({ name: "home" });
+    else renderLogin(t("pw_set_now_login"));
+  };
+}
+
 /* ---------- login ---------- */
 
 function renderLogin(errorMsg) {
@@ -420,11 +475,22 @@ function renderLogin(errorMsg) {
         </div>
         <button class="btn" type="submit">${esc(t("login"))}</button>
       </form>
-      <p class="center" style="margin-top:1.4rem">
+      <p class="center" style="margin-top:1rem">
+        <button class="linkbtn" id="btnForgot">${esc(t("forgot_password"))}</button>
+      </p>
+      <p class="center" style="margin-top:0.8rem">
         <button class="chipbtn" id="btnLangLogin">${LANG === "en" ? "ไทย" : "EN"}</button>
       </p>
     </div>`;
   document.getElementById("btnLangLogin").onclick = () => { toggleLang(); renderLogin(errorMsg); };
+  document.getElementById("btnForgot").onclick = async () => {
+    const email = (document.getElementById("loginEmail").value || "").trim();
+    if (!email) return renderLogin(t("forgot_need_email"));
+    const { error } = await db.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin + window.location.pathname,
+    });
+    renderLogin(error ? t("forgot_failed") : t("forgot_sent"));
+  };
   document.getElementById("loginForm").onsubmit = async (e) => {
     e.preventDefault();
     const email = document.getElementById("loginEmail").value.trim();
@@ -1900,6 +1966,23 @@ async function init() {
     return;
   }
   db = window.supabase.createClient(APP_CONFIG.SUPABASE_URL, APP_CONFIG.SUPABASE_ANON_KEY);
+
+  // An invite or password-reset link lands here with tokens in the URL.
+  const link = authLinkType();
+  if (link && link.error) {
+    clearAuthHash();
+    return renderLogin(link.error);
+  }
+  if (link) {
+    // Give supabase-js a moment to turn the URL tokens into a session.
+    for (let i = 0; i < 20; i++) {
+      const { data } = await db.auth.getSession();
+      if (data.session) { session = data.session; break; }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return renderSetPassword(link.type);
+  }
+
   const { data } = await db.auth.getSession();
   session = data.session;
   render();

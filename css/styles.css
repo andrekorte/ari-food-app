@@ -479,3 +479,10 @@ h2.ptitle { margin: 0.2rem 0 1rem; font-size: 1.35rem; }
   margin-bottom: 1rem;
 }
 .checkrow input { width: 24px; height: 24px; accent-color: var(--red); flex: none; }
+
+/* ---- Text link button (forgot password) ---- */
+.linkbtn {
+  background: none; border: none; color: var(--red);
+  font: inherit; font-weight: 600; font-size: 0.95rem;
+  cursor: pointer; padding: 0.5rem; min-height: 44px;
+}
