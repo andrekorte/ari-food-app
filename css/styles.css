@@ -533,3 +533,31 @@ h2.ptitle { margin: 0.2rem 0 1rem; font-size: 1.35rem; }
 @media (prefers-reduced-motion: reduce) {
   .savebar { transition: none; }
 }
+
+/* ---- Search suggestions (Stock screen) ---- */
+.acwrap { position: relative; }
+.acbox {
+  position: absolute; left: 0; right: 0; top: calc(100% + 0.35rem);
+  z-index: 25; background: var(--panel);
+  border: 1.5px solid var(--line); border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(41, 27, 27, 0.16);
+  overflow: hidden; display: none;
+}
+.acbox.in { display: block; }
+.acrow {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 0.1rem;
+  width: 100%; min-height: 52px; padding: 0.6rem 0.9rem;
+  background: none; border: none; border-top: 1px solid var(--line);
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+}
+.acrow:first-child { border-top: none; }
+.acrow:active { background: var(--field); }
+.acname { font-size: 1rem; font-weight: 600; }
+.acsub { font-size: 0.8rem; color: var(--muted); }
+
+/* brief highlight after jumping to a row */
+.strow.flash { animation: rowflash 1.6s ease; }
+@keyframes rowflash {
+  0%, 40% { background: var(--yellow-soft); }
+  100% { background: transparent; }
+}

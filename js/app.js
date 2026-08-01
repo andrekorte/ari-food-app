@@ -665,8 +665,53 @@ function renderHome() {
     });
   });
   const search = document.getElementById("stSearch");
-  if (search) {
-    search.oninput = () => {
+  const acBox = document.getElementById("stAc");
+
+  // Suggestions while typing: names beginning with what was typed come
+  // first, then names containing it. Tapping one jumps to that row.
+  const renderSuggestions = (q) => {
+    if (!acBox) return;
+    if (!q) { acBox.innerHTML = ""; acBox.classList.remove("in"); return; }
+    const starts = [], contains = [];
+    for (const ing of state.ingredients) {
+      const hay = normTxt(ing.name + " " + (ing.name_th || ""));
+      if (!hay.includes(q)) continue;
+      (hay.startsWith(q) || normTxt(dName(ing)).startsWith(q) ? starts : contains).push(ing);
+    }
+    const list = [...starts, ...contains].slice(0, 8);
+    if (!list.length) { acBox.innerHTML = ""; acBox.classList.remove("in"); return; }
+    acBox.innerHTML = list.map((ing) => {
+      const st = ingredientStats(ing);
+      const u = unitOf(ing);
+      return `<button class="acrow" data-ac="${ing.id}">
+        <span class="acname">${esc(dName(ing))}</span>
+        <span class="acsub">${esc(t("cat_" + catOf(ing)))}${st ? ` · ${money(st.perBig)}/${u.big}` : ""}</span>
+      </button>`;
+    }).join("");
+    acBox.classList.add("in");
+    acBox.querySelectorAll("[data-ac]").forEach((b) => {
+      b.onclick = () => jumpTo(b.dataset.ac);
+    });
+  };
+
+  const jumpTo = (ingId) => {
+    const ing = findIngredient(ingId);
+    if (!ing) return;
+    search.value = ing.name;
+    acBox.innerHTML = "";
+    acBox.classList.remove("in");
+    applyFilter();
+    const row = $app.querySelector(`.strow[data-ing="${ingId}"]`);
+    if (row) {
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+      row.classList.add("flash");
+      setTimeout(() => row.classList.remove("flash"), 1600);
+      const first = row.querySelector("input");
+      if (first) first.focus({ preventScroll: true });
+    }
+  };
+
+  const applyFilter = () => {
       const q = normTxt(search.value);
       let hits = 0;
       $app.querySelectorAll("details[data-st-cat]").forEach((d) => {
@@ -684,7 +729,15 @@ function renderHome() {
       });
       document.getElementById("stNoMatch").style.display =
         q && hits === 0 ? "" : "none";
+  };
+
+  if (search) {
+    search.oninput = () => {
+      applyFilter();
+      renderSuggestions(normTxt(search.value));
     };
+    search.onblur = () => setTimeout(() => acBox.classList.remove("in"), 180);
+    search.onfocus = () => renderSuggestions(normTxt(search.value));
   }
 
   const sg = document.getElementById("sauceGroup");
@@ -1263,7 +1316,7 @@ function renderStock(existingDraft) {
 
   const stRow = (ing) => {
     const u = unitOf(ing);
-    return `<div class="strow" data-sname="${esc(normTxt(ing.name + " " + (ing.name_th || "")))}">
+    return `<div class="strow" data-ing="${ing.id}" data-sname="${esc(normTxt(ing.name + " " + (ing.name_th || "")))}">
       <span class="stname">${esc(dName(ing))} <span class="stunit">${esc(u.big)}</span></span>
       ${SITES.map((site) => {
         const key = ing.id + "|" + site;
@@ -1294,8 +1347,11 @@ function renderStock(existingDraft) {
       ${state.stockMissing
         ? `<div class="error-box">${esc(t("stock_migration_needed"))}</div>`
         : `<p class="muted" style="margin:0.2rem 0 0.8rem; font-size:0.85rem">${esc(t("stock_hint"))}</p>
-      <input type="search" id="stSearch" placeholder="${esc(t("search_ingredient"))}"
-        aria-label="${esc(t("search_ingredient"))}" autocomplete="off">
+      <div class="acwrap">
+        <input type="search" id="stSearch" placeholder="${esc(t("search_ingredient"))}"
+          aria-label="${esc(t("search_ingredient"))}" autocomplete="off">
+        <div class="acbox" id="stAc"></div>
+      </div>
       <p class="empty" id="stNoMatch" style="display:none; border:none">${esc(t("no_match"))}</p>
       <div style="height:0.7rem"></div>
       <div class="card">${sections}</div>
