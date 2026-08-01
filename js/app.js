@@ -33,6 +33,8 @@ const state = {
   proteins: [],         // customer protein choices (chicken, pork, …)
   aliases: [],          // learned invoice wordings -> ingredient
   profile: null,        // this user's row in profiles (null = full access)
+  users: null,          // team list, loaded only when the Users tab opens
+  usersError: null,
   view: { name: "home" },
   // Remembered navigation state so Back returns exactly where you were.
   ui: { openIng: new Set(), openDish: new Set(), openStock: new Set(),
@@ -59,6 +61,7 @@ const ICONS = {
   cart: I('<circle cx="9" cy="20" r="1.4"/><circle cx="17" cy="20" r="1.4"/><path d="M3 4h2.4l2.2 11.2a1.6 1.6 0 0 0 1.6 1.3h7.9a1.6 1.6 0 0 0 1.6-1.3L20.5 8H6.1"/>'),
   stock: I('<path d="M3 7.5 12 3l9 4.5-9 4.5z"/><path d="M3 7.5V16l9 4.5 9-4.5V7.5"/><path d="M12 12v8.5"/>'),
   sauce: I('<path d="M12 3s-6 7.2-6 11.2a6 6 0 0 0 12 0C18 10.2 12 3 12 3z"/>'),
+  users: I('<circle cx="9" cy="8" r="3.4"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16.5 5.2a3.4 3.4 0 0 1 0 5.6"/><path d="M18 14.2a6.5 6.5 0 0 1 3.5 5.8"/>'),
   camera: I('<path d="M4 8h3l2-2.5h6L17 8h3a1.5 1.5 0 0 1 1.5 1.5V19a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 19V9.5A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="14" r="3.5"/>'),
   photo: I('<rect x="3" y="5" width="18" height="15" rx="2"/><circle cx="9" cy="10.5" r="1.6"/><path d="M3.5 17.5 9 13l4 3.5 3.5-3 4 3.5"/>'),
   logout: I('<path d="M15 4h4.5v16H15"/><path d="M10 8l-4 4 4 4"/><path d="M6 12h9.5"/>'),
@@ -490,7 +493,8 @@ async function render() {
     }
   }
   const v = state.view;
-  if (!isAdmin() && (v.name === "ingredient" || v.name === "dish" || v.name === "sauce")) {
+  const adminOnly = ["ingredient", "dish", "sauce", "users", "user"];
+  if (!isAdmin() && adminOnly.includes(v.name)) {
     state.view = { name: "home" };
     return renderHome();
   }
@@ -500,6 +504,8 @@ async function render() {
   else if (v.name === "sauce") renderSauce(v.id);
   else if (v.name === "basket") renderBasket();
   else if (v.name === "stock") renderStock();
+  else if (v.name === "users") renderUsers();
+  else if (v.name === "user") renderUser(v.id);
   else renderHome();
 }
 
@@ -545,6 +551,9 @@ function tabbar(active) {
     <button class="tab ${active === "stock" ? "active" : ""}" id="tabStock">
       <span class="ticon">${ICONS.stock}</span>${esc(t("tab_stock"))}
     </button>
+    ${isAdmin() ? `<button class="tab ${active === "users" ? "active" : ""}" id="tabUsers">
+      <span class="ticon">${ICONS.users}</span>${esc(t("tab_users"))}
+    </button>` : ""}
   </div></nav>`;
 }
 
@@ -555,6 +564,8 @@ function wireTabbar() {
   if (b) b.onclick = () => go({ name: "basket" });
   const st = document.getElementById("tabStock");
   if (st) st.onclick = () => go({ name: "stock" });
+  const us = document.getElementById("tabUsers");
+  if (us) us.onclick = () => go({ name: "users" });
 }
 
 /* ---------- invite & password reset ---------- */
@@ -1820,6 +1831,398 @@ function renderStock(existingDraft) {
 
   // Collapsed, and not fetched at all until the user opens it.
   mountHistory("stockHistory", feeds.stock, t("stock_history"), stockHistoryHtml);
+}
+
+/* ---------- users ---------- */
+
+// Accounts live in Supabase's auth system, which the app is not allowed to
+// read or change directly — that would need the service_role key, and any
+// key shipped in a web app can be read by anyone. So every account action
+// goes through the manage-users Edge Function, which holds the key and
+// checks the caller is an admin before doing anything.
+async function usersCall(action, payload) {
+  const { data, error } = await db.functions.invoke("manage-users", {
+    body: { action, ...payload },
+  });
+  if (error) {
+    // The function returns its reason in the body even on a 4xx.
+    let msg = "";
+    try { msg = (await error.context.json()).error; } catch (_) { /* no body */ }
+    throw new Error(msg || error.message);
+  }
+  if (data && data.error) throw new Error(data.error);
+  return data;
+}
+
+// Where an invited person lands to choose their password.
+function inviteRedirect() {
+  return window.location.origin + window.location.pathname;
+}
+
+function findUser(id) {
+  return (state.users || []).find((u) => u.id === id) || null;
+}
+
+function roleBadge(role) {
+  return `<span class="badge role-${esc(role)}">${esc(t("role_" + role))}</span>`;
+}
+
+function renderUsers(msg) {
+  const users = state.users;
+
+  const listHtml = users === null
+    ? `<p class="empty">${esc(t("loading"))}</p>`
+    : users.length
+      ? users.map((u) => `<div class="lrow">
+          <button class="lmain" data-user="${esc(u.id)}">
+            <span class="lname">${esc(u.display_name || u.email)}
+              ${u.pending ? `<span class="pill">${esc(t("pending"))}</span>` : ""}</span>
+            <span class="lmeta">${roleBadge(u.role)}</span>
+            <span class="chev">›</span>
+          </button>
+        </div>`).join("")
+      : `<p class="empty">${esc(t("no_users"))}</p>`;
+
+  $app.innerHTML = `
+    ${header({ home: true })}
+    <main class="content">
+      ${state.usersError
+        ? `<div class="error-box bad">${esc(state.usersError)}</div>`
+        : ""}
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">${esc(t("users"))}</span>
+          <span class="count num">${users ? users.length : ""}</span>
+        </div>
+        ${listHtml}
+        <div class="card-foot">
+          <button class="btn ghost small" id="btnAddUser">${esc(t("add_user"))}</button>
+        </div>
+      </div>
+    </main>
+    ${tabbar("users")}`;
+
+  wireHeader();
+  wireTabbar();
+
+  $app.querySelectorAll("[data-user]").forEach((b) => {
+    b.onclick = () => go({ name: "user", id: b.dataset.user });
+  });
+  document.getElementById("btnAddUser").onclick = openAddUser;
+
+  if (msg) showToast(msg);
+
+  // Fetched only when this tab is open, never at launch.
+  if (users === null) {
+    usersCall("list").then((d) => {
+      state.users = d.users;
+      state.usersError = null;
+      if (state.view.name === "users") renderUsers();
+    }).catch((e) => {
+      console.error(e);
+      state.users = [];
+      state.usersError = e.message || t("users_failed");
+      if (state.view.name === "users") renderUsers();
+    });
+  }
+}
+
+function openAddUser() {
+  const overlay = document.createElement("div");
+  overlay.className = "picker";
+  overlay.innerHTML = `
+    <div class="phead">
+      <span class="htitle" style="flex:1">${esc(t("add_user"))}</span>
+      <button class="pcancel" id="auClose">${esc(t("cancel"))}</button>
+    </div>
+    <div class="content" style="padding-top:0.9rem">
+      <p class="muted" style="margin:0 0 0.9rem; font-size:0.85rem">${esc(t("add_user_hint"))}</p>
+      <div class="field">
+        <label for="auEmail">${esc(t("email"))}</label>
+        <input type="email" id="auEmail" inputmode="email" autocapitalize="off"
+          autocomplete="off" spellcheck="false" placeholder="name@example.com">
+      </div>
+      <div class="field">
+        <label for="auName">${esc(t("display_name"))}</label>
+        <input type="text" id="auName" placeholder="${esc(t("display_name_hint"))}">
+      </div>
+      <div class="field">
+        <label>${esc(t("role"))}</label>
+        <div class="seg" id="auRole">
+          <button type="button" class="segbtn active" data-role="shopper">${esc(t("role_shopper"))}</button>
+          <button type="button" class="segbtn" data-role="admin">${esc(t("role_admin"))}</button>
+        </div>
+      </div>
+      <div class="error-box bad" id="auErr" style="display:none"></div>
+      <button class="btn" id="auSend">${esc(t("send_invite"))}</button>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  let role = "shopper";
+  overlay.querySelectorAll("#auRole .segbtn").forEach((b) => {
+    b.onclick = () => {
+      role = b.dataset.role;
+      overlay.querySelectorAll("#auRole .segbtn").forEach((x) => {
+        x.classList.toggle("active", x.dataset.role === role);
+      });
+    };
+  });
+
+  const close = () => overlay.remove();
+  overlay.querySelector("#auClose").onclick = close;
+
+  const err = overlay.querySelector("#auErr");
+  const send = overlay.querySelector("#auSend");
+  send.onclick = async () => {
+    const email = overlay.querySelector("#auEmail").value.trim();
+    const name = overlay.querySelector("#auName").value.trim();
+    if (!email) return;
+    send.disabled = true;
+    send.textContent = t("sending");
+    err.style.display = "none";
+    try {
+      await usersCall("invite", {
+        email, role, display_name: name, redirect_to: inviteRedirect(),
+      });
+      close();
+      state.users = null;              // reload the list with the new person
+      renderUsers(t("invite_sent").replace("{email}", email));
+    } catch (e) {
+      console.error(e);
+      err.textContent = e.message || t("invite_failed");
+      err.style.display = "";
+      send.disabled = false;
+      send.textContent = t("send_invite");
+    }
+  };
+  overlay.querySelector("#auEmail").focus();
+}
+
+/* ---------- one user: role, activity, delete ---------- */
+
+// A person's work is recorded under their name in three places. Their rows
+// are only fetched when their page is open, ten entries at a time.
+let userActivity = { forId: null, rows: null, shown: HISTORY_PAGE, limit: 0, done: false };
+
+function activityNames(u) {
+  return [u.display_name, u.email, (u.email || "").split("@")[0]]
+    .filter(Boolean)
+    .filter((v, i, a) => a.indexOf(v) === i);
+}
+
+async function loadUserActivity(u, entries) {
+  const want = Math.max(entries, HISTORY_PAGE);
+  if (userActivity.forId === u.id && (userActivity.done || userActivity.limit >= want)) return;
+  const names = activityNames(u);
+  const each = want * 3;   // over-fetch a little; the three lists interleave
+  const [ch, pu, st] = await Promise.all([
+    db.from("change_log").select("*").in("changed_by", names)
+      .order("changed_at", { ascending: false }).limit(each),
+    db.from("purchases").select("*").in("entered_by", names)
+      .order("purchased_at", { ascending: false }).limit(each),
+    db.from("stock_changes").select("*").in("changed_by", names)
+      .order("changed_at", { ascending: false }).limit(each),
+  ]);
+
+  const rows = [];
+  if (!ch.error) {
+    for (const c of ch.data) {
+      rows.push({ at: c.changed_at, kind: "change", row: c });
+    }
+  }
+  if (!pu.error) {
+    const groups = new Map();
+    for (const p of pu.data) {
+      const key = p.batch_id || new Date(p.purchased_at).toISOString();
+      if (!groups.has(key)) groups.set(key, { at: p.purchased_at, kind: "purchase", rows: [] });
+      const g = groups.get(key);
+      g.rows.push(p);
+      if (new Date(p.purchased_at) > new Date(g.at)) g.at = p.purchased_at;
+    }
+    rows.push(...groups.values());
+  }
+  if (!st.error) {
+    const groups = new Map();
+    for (const c of st.data) {
+      const key = c.batch_id || c.changed_at;
+      if (!groups.has(key)) {
+        groups.set(key, { at: c.changed_at, kind: "stock", source: c.source, rows: [] });
+      }
+      groups.get(key).rows.push(c);
+    }
+    rows.push(...groups.values());
+  }
+
+  rows.sort((a, b) => new Date(b.at) - new Date(a.at));
+  userActivity = {
+    forId: u.id, rows, shown: userActivity.forId === u.id ? userActivity.shown : HISTORY_PAGE,
+    limit: want,
+    // Every source returned less than we asked for, so there is no more.
+    done: (ch.data || []).length < each && (pu.data || []).length < each
+       && (st.data || []).length < each,
+  };
+}
+
+function activityEntryHtml(e) {
+  if (e.kind === "purchase") {
+    const total = e.rows.reduce((s, r) => s + (Number(r.price_paid) || 0), 0);
+    const site = (e.rows.find((r) => r.site) || {}).site;
+    return `<details class="group">
+      <summary>
+        <span>${esc(dateTimeShort(e.at))} · ${esc(t("act_purchase"))}${site ? ` · ${esc(t("site_" + site))}` : ""}</span>
+        <span class="gright"><span class="badge num">${money(total)}</span><span class="chev">›</span></span>
+      </summary>
+      <div class="scroll-x" style="padding:0.3rem 0.6rem">
+        <table class="list"><tbody class="num">
+          ${e.rows.map((r) => {
+            const ing = findIngredient(r.ingredient_id);
+            return `<tr><td>${esc(ing ? dName(ing) : "?")}</td>
+              <td class="num">${fmtQty(r.purchased_kg)} ${esc(unitOf(ing || {}).big)}</td>
+              <td class="num">${money(r.price_paid)}</td></tr>`;
+          }).join("")}
+        </tbody></table>
+      </div>
+    </details>`;
+  }
+  if (e.kind === "stock") {
+    return `<details class="group">
+      <summary>
+        <span>${esc(dateTimeShort(e.at))} · ${esc(e.source === "purchase" ? t("src_purchase") : t("act_stocktake"))}</span>
+        <span class="gright"><span class="badge num">${e.rows.length}</span><span class="chev">›</span></span>
+      </summary>
+      <div class="scroll-x" style="padding:0.3rem 0.6rem">
+        <table class="list"><tbody class="num">
+          ${e.rows.map((c) => {
+            const ing = findIngredient(c.ingredient_id);
+            const from = c.qty_from == null ? "–" : fmtQty(c.qty_from);
+            return `<tr><td>${esc(ing ? dName(ing) : "?")}</td>
+              <td>${esc(t("site_" + c.site))}</td>
+              <td class="num">${from} → <strong>${fmtQty(c.qty_to)}</strong></td></tr>`;
+          }).join("")}
+        </tbody></table>
+      </div>
+    </details>`;
+  }
+  const c = e.row;
+  return `<details class="group">
+    <summary>
+      <span>${esc(dateTimeShort(e.at))} · ${esc(changeLabel(c))}</span>
+      <span class="gright">
+        <span class="badge act-${esc(c.action)}">${esc(t("act_" + c.action))}</span>
+        <span class="chev">›</span>
+      </span>
+    </summary>
+    ${changedFieldsHtml(c) || `<p class="empty" style="border:none; font-size:0.8rem">${esc(t("no_detail"))}</p>`}
+  </details>`;
+}
+
+function userActivityHtml() {
+  const all = userActivity.rows || [];
+  const shown = all.slice(0, userActivity.shown);
+  if (!shown.length) return `<p class="empty" style="border:none">${esc(t("no_activity"))}</p>`;
+  const more = (userActivity.shown < all.length || !userActivity.done)
+    ? `<button class="btn ghost small" data-load-more>${esc(t("load_more"))}</button>` : "";
+  return shown.map(activityEntryHtml).join("") + more;
+}
+
+function renderUser(id) {
+  const u = findUser(id);
+  if (!u) return go({ name: "users" });
+
+  $app.innerHTML = `
+    ${header({ title: u.display_name || u.email })}
+    <main class="content no-tabs">
+      <div class="card">
+        <div class="lrow"><span class="lname">${esc(t("email"))}</span>
+          <span class="lmeta">${esc(u.email)}</span></div>
+        <div class="lrow"><span class="lname">${esc(t("last_sign_in"))}</span>
+          <span class="lmeta num">${u.last_sign_in_at ? esc(dateTimeShort(u.last_sign_in_at)) : esc(t("never"))}</span></div>
+      </div>
+
+      <div class="field">
+        <label>${esc(t("role"))}</label>
+        <div class="seg" id="uRole">
+          <button type="button" class="segbtn ${u.role === "shopper" ? "active" : ""}" data-role="shopper">${esc(t("role_shopper"))}</button>
+          <button type="button" class="segbtn ${u.role === "admin" ? "active" : ""}" data-role="admin">${esc(t("role_admin"))}</button>
+        </div>
+        <p class="muted" style="margin:0.4rem 0 0; font-size:0.8rem">${esc(t("role_hint"))}</p>
+      </div>
+
+      ${u.pending ? `<button class="btn ghost small" id="btnResend">${esc(t("resend_invite"))}</button>` : ""}
+
+      <p class="section-label">${esc(t("activity"))}</p>
+      <div class="card"><div class="hbody">
+        <p class="empty" style="border:none">${esc(t("loading"))}</p>
+      </div></div>
+
+      ${u.is_self ? "" : `<button class="btn danger-link" id="btnDelUser">${esc(t("delete_user"))}</button>`}
+    </main>`;
+
+  wireHeader();
+  const back = document.getElementById("btnBack");
+  if (back) back.onclick = () => go({ name: "users" });
+
+  $app.querySelectorAll("#uRole .segbtn").forEach((b) => {
+    b.onclick = async () => {
+      const role = b.dataset.role;
+      if (role === u.role) return;
+      try {
+        await usersCall("set_role", { user_id: u.id, role });
+        u.role = role;
+        $app.querySelectorAll("#uRole .segbtn").forEach((x) => {
+          x.classList.toggle("active", x.dataset.role === role);
+        });
+        // Changing your own role changes what you can see.
+        if (u.is_self) { state.profileFetched = false; dataFresh = false; }
+        showToast(t("role_saved").replace("{role}", t("role_" + role)));
+      } catch (e) {
+        console.error(e); alert(e.message || t("save_failed"));
+      }
+    };
+  });
+
+  const resend = document.getElementById("btnResend");
+  if (resend) resend.onclick = async () => {
+    resend.disabled = true;
+    try {
+      await usersCall("resend", { email: u.email, redirect_to: inviteRedirect() });
+      showToast(t("invite_sent").replace("{email}", u.email));
+    } catch (e) {
+      console.error(e); alert(e.message || t("invite_failed"));
+    }
+    resend.disabled = false;
+  };
+
+  const del = document.getElementById("btnDelUser");
+  if (del) del.onclick = async () => {
+    if (!confirm(t("confirm_delete_user").replace("{name}", u.display_name || u.email))) return;
+    try {
+      await usersCall("delete", { user_id: u.id });
+      state.users = null;
+      go({ name: "users" });
+      showToast(t("user_deleted").replace("{name}", u.display_name || u.email));
+    } catch (e) {
+      console.error(e); alert(e.message || t("save_failed"));
+    }
+  };
+
+  const paint = () => {
+    const body = $app.querySelector(".hbody");
+    if (!body) return;
+    body.innerHTML = userActivityHtml();
+    const btn = body.querySelector("[data-load-more]");
+    if (btn) btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = t("loading");
+      userActivity.shown += HISTORY_PAGE;
+      await loadUserActivity(u, userActivity.shown);
+      paint();
+    };
+  };
+  if (userActivity.forId !== u.id) userActivity = { forId: null, rows: null, shown: HISTORY_PAGE, limit: 0, done: false };
+  loadUserActivity(u, userActivity.shown).then(() => {
+    if (state.view.name === "user" && state.view.id === u.id) paint();
+  }).catch((e) => console.error(e));
 }
 
 /* ---------- ingredient editor ---------- */

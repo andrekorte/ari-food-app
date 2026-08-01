@@ -65,7 +65,7 @@ h2, .brand, .card-title, .login-logo .name, .htitle {
 .header .brandwrap {
   display: inline-flex; align-items: center; gap: 0.6rem; min-width: 0;
 }
-.header .brand, .header .htitle {
+.header .brand, .header .htitle, .picker .phead .htitle {
   font-weight: 700; font-size: 1.18rem; color: var(--red-bright);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
@@ -100,6 +100,9 @@ h2, .brand, .card-title, .login-logo .name, .htitle {
 }
 .tab .ticon { font-size: 1.7rem; line-height: 1.1; }
 .tab.active { color: var(--yellow); }
+/* Four tabs on a narrow phone: keep the labels on one line. */
+.tabbar .inner:has(.tab:nth-child(4)) .tab { font-size: 0.72rem; }
+.tabbar .inner:has(.tab:nth-child(4)) .tab .ticon { font-size: 1.55rem; }
 
 /* ---- Page content ---- */
 .content {
@@ -213,6 +216,16 @@ details.group summary .gright {
   border-radius: 999px; font-size: 0.82rem; font-weight: 700;
   padding: 0.16rem 0.66rem; min-width: 1.9rem; text-align: center;
 }
+/* Access level on the Users tab. */
+.badge.role-admin { background: var(--chrome); color: var(--yellow); }
+.badge.role-shopper { background: var(--field); color: var(--muted); border: 1px solid var(--line); }
+/* Invited but hasn't chosen a password yet. */
+.pill {
+  margin-left: 0.45rem; padding: 0.08rem 0.5rem; border-radius: 999px;
+  background: var(--field); border: 1px solid var(--line);
+  color: var(--muted); font-size: 0.7rem; font-weight: 700;
+}
+
 /* What kind of edit a change-history row records. */
 .badge.act-created { background: #1f7a4d; color: #fff; }
 .badge.act-updated { background: var(--yellow); color: #291b1b; }
