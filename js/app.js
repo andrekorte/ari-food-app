@@ -664,6 +664,29 @@ function renderHome() {
       else state.ui.openIng.delete(d.dataset.ingCat);
     });
   });
+  const search = document.getElementById("stSearch");
+  if (search) {
+    search.oninput = () => {
+      const q = normTxt(search.value);
+      let hits = 0;
+      $app.querySelectorAll("details[data-st-cat]").forEach((d) => {
+        let shown = 0;
+        d.querySelectorAll(".strow").forEach((r) => {
+          const match = !q || r.dataset.sname.includes(q);
+          r.style.display = match ? "" : "none";
+          if (match) shown++;
+        });
+        d.style.display = shown ? "" : "none";
+        // While searching every matching section is open; restore the
+        // remembered state when the box is cleared.
+        d.open = q ? shown > 0 : state.ui.openStock.has(d.dataset.stCat);
+        hits += shown;
+      });
+      document.getElementById("stNoMatch").style.display =
+        q && hits === 0 ? "" : "none";
+    };
+  }
+
   const sg = document.getElementById("sauceGroup");
   if (sg) sg.addEventListener("toggle", () => { state.ui.openSauce = sg.open; });
   $app.querySelectorAll("details[data-dish-cat]").forEach((d) => {
@@ -1240,7 +1263,7 @@ function renderStock(existingDraft) {
 
   const stRow = (ing) => {
     const u = unitOf(ing);
-    return `<div class="strow">
+    return `<div class="strow" data-sname="${esc(normTxt(ing.name + " " + (ing.name_th || "")))}">
       <span class="stname">${esc(dName(ing))} <span class="stunit">${esc(u.big)}</span></span>
       ${SITES.map((site) => {
         const key = ing.id + "|" + site;
@@ -1271,6 +1294,10 @@ function renderStock(existingDraft) {
       ${state.stockMissing
         ? `<div class="error-box">${esc(t("stock_migration_needed"))}</div>`
         : `<p class="muted" style="margin:0.2rem 0 0.8rem; font-size:0.85rem">${esc(t("stock_hint"))}</p>
+      <input type="search" id="stSearch" placeholder="${esc(t("search_ingredient"))}"
+        aria-label="${esc(t("search_ingredient"))}" autocomplete="off">
+      <p class="empty" id="stNoMatch" style="display:none; border:none">${esc(t("no_match"))}</p>
+      <div style="height:0.7rem"></div>
       <div class="card">${sections}</div>
       <div class="calc" id="stockValue"></div>`}
     </main>
