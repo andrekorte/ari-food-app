@@ -4,12 +4,14 @@
 # ---------------- ingredients: key -> (en, th, unit, category) ----------------
 ING = {
   # proteins
-  "chicken_slice": ("Chicken slice", "เนื้อไก่สไลด์", "kg", "meat"),
-  "chicken_curry": ("Chicken curry cut", "ไก่สำหรับแกง", "kg", "meat"),
+  "chicken_slice": ("Chicken breast fillet sliced", "อกไก่สไลด์", "kg", "meat"),
+  "chicken_curry": ("Chicken maryland fillet diced", "ไก่แมรี่แลนด์หั่นเต๋า", "kg", "meat"),
   "chicken_carcass": ("Chicken carcass", "โครงไก่", "kg", "meat"),
-  "pork_slice": ("Pork slice", "เนื้อหมูสไลด์", "kg", "meat"),
+  "pork_slice": ("Pork lean leg sliced", "สะโพกหมูสไลด์", "kg", "meat"),
+  "pork_topside": ("Pork topside denuded", "หมูสะโพกบน", "kg", "meat"),
   "pork_mince": ("Pork mince", "หมูสับ", "kg", "meat"),
-  "beef_slice": ("Beef slice", "เนื้อวัวสไลด์", "kg", "meat"),
+  "beef_slice": ("Beef sliced 1.5mm", "เนื้อวัวสไลด์", "kg", "meat"),
+  "beef_topside": ("Beef topside sliced", "เนื้อสันสะโพกสไลด์", "kg", "meat"),
   "prawn": ("Prawns", "กุ้ง", "kg", "meat"),
   "squid": ("Squid", "ปลาหมึก", "kg", "meat"),
   "crispy_pork": ("Crispy pork", "หมูกรอบ", "kg", "meat"),
@@ -33,7 +35,7 @@ ING = {
   "morning_glory": ("Morning glory", "ผักบุ้ง", "kg", "veg"),
   "bean_sprouts": ("Bean sprouts", "ถั่วงอก", "kg", "veg"),
   "garlic_chives": ("Garlic chives", "กุยช่าย", "kg", "veg"),
-  "snake_bean": ("Snake beans", "ถั่วฝักยาว", "kg", "veg"),
+  "snake_bean": ("Green beans", "ถั่วฝักยาว", "kg", "veg"),
   "carrot": ("Carrot", "แครอท", "kg", "veg"),
   "capsicum": ("Capsicum", "พริกหวาน", "kg", "veg"),
   "zucchini": ("Zucchini", "ซูกินี", "kg", "veg"),
@@ -62,8 +64,12 @@ ING = {
   "pandan": ("Pandan leaves", "ใบเตย", "kg", "veg"),
   "daikon": ("Daikon radish", "หัวไชเท้า", "kg", "veg"),
   "lime": ("Lime", "มะนาว", "kg", "veg"),
+  "lemon": ("Lemon", "เลมอน", "kg", "veg"),
+  "red_onion": ("Red onion", "หอมหัวใหญ่แดง", "kg", "veg"),
+  "sawtooth_coriander": ("Sawtooth coriander", "ผักชีฝรั่ง", "kg", "veg"),
   # sauces, pastes, seasonings (bought in)
   "oyster_sauce": ("Oyster sauce", "น้ำมันหอย", "l", "sauce"),
+  "gf_oyster_sauce": ("GF oyster sauce", "น้ำมันหอยปลอดกลูเตน", "kg", "sauce"),
   "light_soy": ("Light soy sauce", "ซีอิ๊วขาว", "l", "sauce"),
   "seasoning_green": ("Seasoning sauce (green cap)", "ซอสปรุงรสฝาเขียว", "l", "sauce"),
   "seasoning_white": ("Seasoning sauce (white cap)", "ซอสปรุงรสฝาขาว", "l", "sauce"),
@@ -79,7 +85,7 @@ ING = {
   "garlic_oil": ("Fried garlic oil", "น้ำมันกระเทียมเจียว", "l", "sauce"),
   "coconut_milk": ("Coconut milk", "กะทิ", "l", "sauce"),
   "evaporated_milk": ("Evaporated milk", "นมข้นจืด", "l", "sauce"),
-  "tamarind": ("Tamarind juice", "น้ำมะขาม", "l", "sauce"),
+  "tamarind": ("Tamarind concentrate", "น้ำมะขาม", "kg", "sauce"),
   "lime_juice": ("Fresh lime juice", "น้ำมะนาวสด", "l", "sauce"),
   "water": ("Water", "น้ำเปล่า", "l", "sauce"),
   "yentafo_penta": ("Yentafo sauce (Penta)", "ซอสเย็นตาโฟเพนต้า", "kg", "sauce"),
@@ -255,7 +261,7 @@ d("Sen Kaeaw Salad – Kelp Noodle", "ala_carte", 16.99, True, [
   ("i","cashew_nuts",10)])
 d("Tum Sen Lek – Thin Rice Noodle Salad", "ala_carte", 16.99, True, [
   ("i","pla_ra",50), ("i","white_sugar",10), ("i","msg",2.5), ("i","lime",30),
-  ("i","garlic",2.5), ("i","birdseye",5), ("i","tomato",40), ("i","coriander",2),
+  ("i","garlic",2.5), ("i","birdseye",5), ("i","tomato",40), ("i","sawtooth_coriander",2),
   ("i","sen_lek",120)])
 
 # --- noodle soups (per bowl) ---
@@ -266,7 +272,7 @@ d("Clear Noodle Soup", "noodle_soup", 16.99, True,
   [("s","clear_soup",250), ("i","bean_sprouts",30)] + NOODLE_COMMON)
 d("Boat Noodles", "noodle_soup", 16.99, True,
   [("s","boat_soup",250), ("i","bean_sprouts",30), ("i","gai_lan",30),
-   ("s","noodle_base_sauce",15), ("i","thai_basil",2)] + NOODLE_COMMON)
+   ("s","noodle_base_sauce",15), ("i","thai_basil",2), ("i","sawtooth_coriander",3)] + NOODLE_COMMON)
 d("Spicy and Sour Soup", "noodle_soup", 16.99, True,
   [("s","clear_soup",200), ("s","spicy_sour",50), ("i","bean_sprouts",30),
    ("i","pork_mince",30), ("i","chilli_powder",5), ("i","peanuts_crushed",15),
@@ -348,7 +354,7 @@ for name, base in GF:
 # ---------------- proteins ----------------
 PROTEIN = [("Chicken","ไก่","chicken_slice",100,16.99),
            ("Pork","หมู","pork_slice",80,16.99),
-           ("Beef","เนื้อ","beef_slice",80,16.99),
+           ("Beef","เนื้อ","beef_slice",80,16.99),   # sliced 1.5mm, per Andre
            ("Tofu","เต้าหู้","tofu",100,16.99),
            ("No meat","ไม่ใส่เนื้อ",None,0,16.99),
            ("Prawn","กุ้ง","prawn",120,18.99),

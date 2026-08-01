@@ -105,3 +105,51 @@ categories. Ari's Drinks were kept (no recipes yet).
 
 Dishes flagged "customer chooses the protein" show a cost/margin table
 for all nine, instead of being duplicated nine times.
+
+---
+
+# Invoice import (August 2026)
+
+Built from 14 invoices across 6 suppliers: **B&E Poultry**, **Darra
+Meats**, **OP Meats**, **Efresh**, **Tangola**, **T&D Trading**
+(≈90 line items, July 2026).
+
+**Added:** 163 supplier aliases · 68 opening prices.
+
+## Ingredient decisions from the invoices
+
+| Decision | Result |
+|---|---|
+| Beef | **two** ingredients — *Beef sliced 1.5mm* (à la carte protein) and *Beef topside sliced* |
+| Pork | **two** — *Pork lean leg sliced* (à la carte protein) and *Pork topside denuded* |
+| Chicken | *Breast fillet sliced* = stir-fries · *Maryland fillet diced* = curries |
+| "Pork belly cooked roast" | = **crispy pork** (หมูกรอบ), $14.80/kg |
+| Efresh "Shallots" (bunch) | = **spring onions**; Thai red shallots stay separate |
+| "Beans – Green" | same bean as ถั่วท่อน/ถั่วซอย → ingredient renamed **Green beans** |
+| Coconut sugar + palm sugar | **one** ingredient (most recent purchase sets the price) |
+| Added | Lemon · Red onion · Sawtooth coriander · GF oyster sauce |
+| Tamarind | unit changed from litres to **kg** (bought as 1 kg concentrate) |
+| Noodle powders | Gosto **Spicy** 208 g = boat noodle · Gosto plain 208 g = clear soup · Knorr 800 g = คนอร์ |
+| Yentafo | both Penta products (454 g jars and 3 kg chilli/bean oil) map to one ingredient |
+| Not added | Basa, glutinous rice, tempura mix, salted crab, Thai/Na-Arun tea |
+| Skipped | cling wrap, fuel levy, delivery fee, card fee, ready-made spring rolls, desserts |
+
+## Assumptions
+
+- **Water** seeded at a nominal $0.002/L so soups cost complete.
+- **Bunch weights**: spring onion 100 g · coriander 80 g · choy sum 250 g.
+- **GT Chicken Soup Powder 150 g** — not mapped, no ingredient created.
+- Opening purchases carry **no wastage**. Add prep loss per ingredient in
+  the app where it matters (e.g. whole vegetables, bone-in meat).
+
+## Margins are optimistic until more invoices arrive
+
+31 recipe ingredients still have no price — including thin rice noodles,
+kelp noodles, gai lan, holy basil, tofu, meatballs, white sugar and white
+pepper. Dishes therefore show ~85–93% gross margin, where a Thai
+restaurant typically runs 65–75%. Costs marked with `*` are incomplete;
+they will rise (and margins settle) as those ingredients get scanned in.
+
+Still needed to complete the picture: the **GF stir-fry sauce** recipe,
+the **chestnut sauce** and **yum dressing** recipes, and real **hot bar
+batch yields**.
