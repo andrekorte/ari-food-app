@@ -1270,13 +1270,42 @@ function renderStock(existingDraft) {
         : `<p class="muted" style="margin:0.2rem 0 0.8rem; font-size:0.85rem">${esc(t("stock_hint"))}</p>
       <button class="btn" id="btnStSave" disabled>${esc(t("save_changes"))}</button>
       <div style="height:0.6rem"></div>
-      <div class="card">${sections}</div>`}
+      <div class="card">${sections}</div>
+      <div class="calc" id="stockValue"></div>`}
     </main>
     ${tabbar("stock")}`;
 
   wireHeader();
   wireTabbar();
   if (state.stockMissing) return;
+
+  // Value of everything currently in stock, using each ingredient's latest
+  // purchase price. Reflects unsaved edits so the number moves as you type.
+  const renderStockValue = () => {
+    const el = document.getElementById("stockValue");
+    if (!el) return;
+    const perSite = {};
+    let priced = 0, unpriced = 0;
+    SITES.forEach((x) => (perSite[x] = 0));
+    for (const ing of state.ingredients) {
+      const st = ingredientStats(ing);
+      for (const site of SITES) {
+        const key = ing.id + "|" + site;
+        const raw = key in draft.edits ? draft.edits[key] : stockOf(ing.id, site);
+        const qty = Number(raw);
+        if (!(qty > 0)) continue;
+        if (st) { perSite[site] += qty * st.perBig; priced++; }
+        else unpriced++;
+      }
+    }
+    const total = SITES.reduce((a, x) => a + perSite[x], 0);
+    el.innerHTML = `<div class="caption">${esc(t("stock_value"))}</div>
+      ${SITES.map((x) => `<div class="crow num"><span>${esc(t("site_" + x))}</span><span>${money(perSite[x])}</span></div>`).join("")}
+      <div class="crow num" style="border-top:1px solid var(--yellow); margin-top:0.35rem; padding-top:0.45rem">
+        <span><strong>${esc(t("stock_value_total"))}</strong></span><strong>${money(total)}</strong>
+      </div>
+      ${unpriced ? `<div class="crow"><span class="muted" style="font-size:0.82rem">${esc(t("stock_value_partial").replace("{n}", unpriced))}</span></div>` : ""}`;
+  };
 
   const saveBtn = document.getElementById("btnStSave");
   const updateSaveBtn = () => {
@@ -1295,6 +1324,7 @@ function renderStock(existingDraft) {
     inp.oninput = () => {
       draft.edits[inp.dataset.st] = inp.value;
       updateSaveBtn();
+      renderStockValue();
     };
   });
 
@@ -1325,6 +1355,7 @@ function renderStock(existingDraft) {
   };
 
   updateSaveBtn();
+  renderStockValue();
 }
 
 /* ---------- ingredient editor ---------- */
