@@ -469,3 +469,13 @@ h2.ptitle { margin: 0.2rem 0 1rem; font-size: 1.35rem; }
 @media (prefers-reduced-motion: reduce) {
   .spinner { animation-duration: 2.5s; }
 }
+
+/* ---- Checkbox row (e.g. "customer chooses the protein") ---- */
+.checkrow {
+  display: flex; align-items: center; gap: 0.7rem;
+  background: var(--panel); border: 1.5px solid var(--line);
+  border-radius: 13px; padding: 0.75rem 0.85rem; min-height: 52px;
+  box-shadow: var(--shadow); cursor: pointer; font-weight: 600;
+  margin-bottom: 1rem;
+}
+.checkrow input { width: 24px; height: 24px; accent-color: var(--red); flex: none; }

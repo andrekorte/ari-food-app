@@ -21,6 +21,7 @@ const state = {
   saucesMissing: false, // categories/sauces migration not run yet
   stock: [],
   stockMissing: false,  // stock migration not run yet
+  proteins: [],         // customer protein choices (chicken, pork, …)
   profile: null,        // this user's row in profiles (null = full access)
   view: { name: "home" },
   // Remembered navigation state so Back returns exactly where you were.
@@ -34,7 +35,7 @@ const APP_NAME = "Food tracker";
 const CATS = ["meat", "veg", "sauce", "other"];
 // Menu sections from ari-thaistreetfood.com.
 const DISH_CATS = [
-  "ala_carte", "noodle_soup", "entree", "vegan", "gluten_free",
+  "ala_carte", "noodle_soup", "hot_bar", "entree", "vegan", "gluten_free",
   "drinks", "dessert", "snacks", "special", "other",
 ];
 const SITES = ["ari", "yindee", "sayhi"];
@@ -149,18 +150,43 @@ function findSauce(id) {
 }
 
 // Sauce batch: total grams, total cost, and cost per gram from its recipe.
-function sauceStats(sauce) {
-  const rows = (sauce && sauce.sauce_ingredients) || [];
+// A sauce line may reference another sauce (e.g. tom yum stir-fry sauce
+// contains stir-fry sauce); `seen` guards against a circular reference.
+function sauceStats(sauce, seen) {
+  if (!sauce) return null;
+  seen = seen || new Set();
+  if (seen.has(sauce.id)) return null;
+  seen.add(sauce.id);
+  const rows = sauce.sauce_ingredients || [];
   let grams = 0, cost = 0, complete = rows.length > 0;
   for (const r of rows) {
-    const st = ingredientStats(findIngredient(r.ingredient_id));
     const g = Number(r.grams);
-    if (!st || !(g > 0)) { complete = false; continue; }
+    let per = null;
+    if (r.sub_sauce_id) {
+      const st = sauceStats(findSauce(r.sub_sauce_id), new Set(seen));
+      per = st ? st.perG : null;
+    } else {
+      const st = ingredientStats(findIngredient(r.ingredient_id));
+      per = st ? st.perSmall : null;
+    }
+    if (per == null || !(g > 0)) { complete = false; continue; }
     grams += g;
-    cost += g * st.perSmall;
+    cost += g * per;
   }
   if (!(grams > 0)) return null;
   return { grams, cost, perG: cost / grams, complete };
+}
+
+// Cost of one protein portion (null when its price isn't known yet).
+function proteinCost(p) {
+  if (!p || !p.ingredient_id) return 0;
+  const st = ingredientStats(findIngredient(p.ingredient_id));
+  return st ? Number(p.grams) * st.perSmall : null;
+}
+
+function proteinPrice(p, dish) {
+  if (p && p.selling_price != null) return Number(p.selling_price);
+  return dish && dish.selling_price != null ? Number(dish.selling_price) : null;
 }
 
 // Dish rows: [{kind: 'ing'|'sauce', id, grams}]
@@ -183,6 +209,15 @@ function dishCost(rows) {
     total += amount * per;
   }
   return { total, complete };
+}
+
+// Recipe rows of a sauce, in the same {kind,id,grams} shape as dishes.
+function sauceRowsOf(sauce) {
+  return (sauce.sauce_ingredients || []).map((r) =>
+    r.sub_sauce_id
+      ? { kind: "sauce", id: r.sub_sauce_id, grams: r.grams }
+      : { kind: "ing", id: r.ingredient_id, grams: r.grams }
+  );
 }
 
 function dishRowsOf(dish) {
@@ -208,11 +243,12 @@ async function refreshData() {
     db.from("dishes").select("*, dish_ingredients(*)").order("name"),
     db.from("sauces").select("*, sauce_ingredients(*)").order("name"),
     db.from("stock_levels").select("*"),
+    db.from("protein_options").select("*").order("sort_order"),
   ];
   if (!state.profileFetched) {
     jobs.push(db.from("profiles").select("*").eq("user_id", session.user.id).maybeSingle());
   }
-  const [ings, dishes, sauces, stock, prof] = await Promise.all(jobs);
+  const [ings, dishes, sauces, stock, prots, prof] = await Promise.all(jobs);
   if (ings.error) throw ings.error;
   if (dishes.error) throw dishes.error;
   state.ingredients = ings.data;
@@ -226,6 +262,8 @@ async function refreshData() {
     state.sauces = sauces.data;
     state.saucesMissing = false;
   }
+
+  state.proteins = prots.error ? [] : prots.data;
 
   if (stock.error) {
     state.stock = [];
@@ -435,10 +473,19 @@ function renderHome() {
   const dishRowHtml = (d) => {
     const rows = dishRowsOf(d);
     const c = dishCost(rows);
-    const sell = d.selling_price != null ? Number(d.selling_price) : null;
-    const gpPct = sell > 0 && rows.length ? ((sell - c.total) / sell) * 100 : null;
+    let total = c.total;
+    let sell = d.selling_price != null ? Number(d.selling_price) : null;
+    // Dishes cooked with the customer's protein choice are shown at the
+    // first protein option (chicken) — the dish screen compares them all.
+    if (d.uses_protein && state.proteins.length) {
+      const p = state.proteins[0];
+      const pc = proteinCost(p);
+      if (pc == null) c.complete = false; else total += pc;
+      sell = proteinPrice(p, d);
+    }
+    const gpPct = sell > 0 && rows.length ? ((sell - total) / sell) * 100 : null;
     const meta = [
-      rows.length ? money(c.total) + (c.complete ? "" : "*") : "–",
+      rows.length ? money(total) + (c.complete ? "" : "*") : "–",
       gpPct == null ? null : gpPct.toFixed(0) + "%",
     ].filter(Boolean).join(" · ");
     return `<div class="lrow">
@@ -1375,21 +1422,19 @@ function renderSauce(id, existingDraft) {
     name: sauce ? sauce.name : "",
     name_th: sauce ? sauce.name_th || "" : "",
     rows: sauce && (sauce.sauce_ingredients || []).length
-      ? sauce.sauce_ingredients.map((r) => ({ id: r.ingredient_id, grams: String(r.grams) }))
-      : [{ id: "", grams: "" }],
+      ? sauceRowsOf(sauce).map((r) => ({ ...r, grams: String(r.grams) }))
+      : [{ kind: "ing", id: "", grams: "" }],
   };
 
   const rowsHtml = draft.rows.map((r, idx) => {
-    const ing = findIngredient(r.id);
-    const label = ing ? dName(ing) : null;
-    const suffix = ing ? unitOf(ing).small : t("u_g");
+    const label = pickedLabel(r);
     return `<div class="erow">
       <button class="pickbtn ${label ? "" : "placeholder"}" data-s-pick="${idx}">
-        ${esc(label || t("choose_item"))}
+        ${r.kind === "sauce" && label ? `<span class="sicon">${ICONS.sauce}</span>` : ""}${esc(label || t("choose_item"))}
       </button>
       <input type="number" class="amt" data-s-g="${idx}" step="1" min="0"
         inputmode="numeric" value="${esc(r.grams)}" aria-label="${esc(t("amount"))}">
-      <span class="sfx" id="sSfx${idx}">${esc(suffix)}</span>
+      <span class="sfx" id="sSfx${idx}">${esc(rowSuffix(r))}</span>
       <span class="rcost num" id="sCost${idx}">–</span>
       <button class="xbtn" data-s-del="${idx}" aria-label="${esc(t("delete"))}">✕</button>
     </div>`;
@@ -1434,13 +1479,13 @@ function renderSauce(id, existingDraft) {
   const updateTotals = () => {
     let grams = 0, cost = 0;
     draft.rows.forEach((r, idx) => {
-      const st = r.id && ingredientStats(findIngredient(r.id));
+      const per = r.id ? rowUnitCost(r) : null;
       const g = Number(r.grams);
       const cell = document.getElementById(`sCost${idx}`);
-      if (st && g > 0) {
-        if (cell) cell.textContent = money(g * st.perSmall);
+      if (per != null && g > 0) {
+        if (cell) cell.textContent = money(g * per);
         grams += g;
-        cost += g * st.perSmall;
+        cost += g * per;
       } else if (cell) cell.textContent = "–";
     });
     document.getElementById("batchSize").textContent = grams > 0 ? `${fmtQty(grams)} ${t("u_g")}` : "–";
@@ -1452,8 +1497,18 @@ function renderSauce(id, existingDraft) {
   $app.querySelectorAll("[data-s-pick]").forEach((btn) => {
     btn.onclick = () => {
       const idx = Number(btn.dataset.sPick);
-      openPicker(ingredientPickerGroups({ cats: ["sauce", "veg", "other", "meat"] }), (item) => {
+      const groups = ingredientPickerGroups({ cats: ["sauce", "veg", "other", "meat"] });
+      const subs = state.sauces.filter((x) => x.id !== id).map((x) => {
+        const st = sauceStats(x);
+        return {
+          kind: "sauce", id: x.id, sauce: true, label: dName(x),
+          sub: st ? `${money(st.perG, 3)}/${t("u_g")}` : esc(t("no_price_yet")),
+        };
+      });
+      if (subs.length) groups.push({ title: t("sauces"), items: subs });
+      openPicker(groups, (item) => {
         captureDraft();
+        draft.rows[idx].kind = item.kind;
         draft.rows[idx].id = item.id;
         renderSauce(id, { ...draft });
       }, { allowCreate: true });
@@ -1466,13 +1521,13 @@ function renderSauce(id, existingDraft) {
     b.onclick = () => {
       captureDraft();
       draft.rows.splice(Number(b.dataset.sDel), 1);
-      if (!draft.rows.length) draft.rows.push({ id: "", grams: "" });
+      if (!draft.rows.length) draft.rows.push({ kind: "ing", id: "", grams: "" });
       renderSauce(id, { ...draft });
     };
   });
   document.getElementById("btnAddRow").onclick = () => {
     captureDraft();
-    draft.rows.push({ id: "", grams: "" });
+    draft.rows.push({ kind: "ing", id: "", grams: "" });
     renderSauce(id, { ...draft });
   };
 
@@ -1482,7 +1537,11 @@ function renderSauce(id, existingDraft) {
     if (!name) return alert(t("need_name"));
     const rows = draft.rows
       .filter((r) => r.id && Number(r.grams) > 0)
-      .map((r) => ({ ingredient_id: r.id, grams: Number(r.grams) }));
+      .map((r) => ({
+        ingredient_id: r.kind === "sauce" ? null : r.id,
+        sub_sauce_id: r.kind === "sauce" ? r.id : null,
+        grams: Number(r.grams),
+      }));
     try {
       let sauceId = id;
       const fields = { name, updated_at: new Date().toISOString(), updated_by: userName() };
@@ -1533,6 +1592,7 @@ function renderDish(id, existingDraft) {
     name: dish ? dish.name : "",
     name_th: dish ? dish.name_th || "" : "",
     category: dish ? dishCatOf(dish) : "other",
+    uses_protein: dish ? !!dish.uses_protein : false,
     selling_price: dish && dish.selling_price != null ? String(dish.selling_price) : "",
     rows: dish && (dish.dish_ingredients || []).length
       ? dishRowsOf(dish).map((r) => ({ ...r, grams: String(r.grams) }))
@@ -1581,12 +1641,19 @@ function renderDish(id, existingDraft) {
           value="${esc(draft.selling_price)}">
       </div>
 
+      ${state.proteins.length ? `<label class="checkrow">
+        <input type="checkbox" id="dishProt" ${draft.uses_protein ? "checked" : ""}>
+        <span>${esc(t("uses_protein"))}</span>
+      </label>` : ""}
+
       <div class="calc">
         <div class="caption">${esc(t("cost_per_portion"))}</div>
-        <div class="crow num"><span>${esc(t("total_cost"))}</span><strong id="dishTotal">–</strong></div>
+        <div class="crow num"><span>${esc(draft.uses_protein ? t("base_cost") : t("total_cost"))}</span><strong id="dishTotal">–</strong></div>
         <div class="crow num"><span>${esc(t("gross_profit"))}</span><strong id="gpAbs">–</strong></div>
         <div class="crow num"><span>${esc(t("margin"))}</span><strong id="gpPct">–</strong></div>
       </div>
+
+      <div id="protPanel"></div>
 
       <button class="btn" id="btnSave">${esc(t("save"))}</button>
       ${isNew ? "" : `<button class="btn danger-link" id="btnDelete">${esc(t("delete_dish"))}</button>
@@ -1602,6 +1669,40 @@ function renderDish(id, existingDraft) {
     draft.selling_price = document.getElementById("dishSell").value;
     const cat = document.getElementById("dishCat");
     if (cat) draft.category = cat.value;
+    const pr = document.getElementById("dishProt");
+    if (pr) draft.uses_protein = pr.checked;
+  };
+
+  // Cost / gross profit / margin for each protein the customer can pick.
+  const renderProteinPanel = (base) => {
+    const el = document.getElementById("protPanel");
+    if (!el) return;
+    if (!draft.uses_protein || !state.proteins.length) { el.innerHTML = ""; return; }
+    const rows = state.proteins.map((p) => {
+      const pc = proteinCost(p);
+      const price = proteinPrice(p, dish || { selling_price: Number(draft.selling_price) || null });
+      const total = pc == null ? null : base + pc;
+      const gp = total != null && price != null ? price - total : null;
+      const pct = gp != null && price > 0 ? (gp / price) * 100 : null;
+      return `<tr>
+        <td>${esc(dName(p))}${p.grams > 0 ? ` <span class="muted">${fmtQty(p.grams)} ${esc(t("u_g"))}</span>` : ""}</td>
+        <td class="num">${total == null ? "–" : money(total)}</td>
+        <td class="num">${price == null ? "–" : money(price)}</td>
+        <td class="num ${gp != null && gp < 0 ? "neg" : ""}">${gp == null ? "–" : money(gp)}</td>
+        <td class="num ${pct != null && pct < 0 ? "neg" : ""}">${pct == null ? "–" : pct.toFixed(0) + "%"}</td>
+      </tr>`;
+    }).join("");
+    el.innerHTML = `<p class="section-label">${esc(t("by_protein"))}</p>
+      <div class="card"><div class="scroll-x" style="padding:0.3rem 0.6rem">
+        <table class="list">
+          <thead><tr>
+            <th>${esc(t("protein"))}</th><th class="num">${esc(t("cost"))}</th>
+            <th class="num">${esc(t("price"))}</th><th class="num">${esc(t("gp"))}</th>
+            <th class="num">${esc(t("margin"))}</th>
+          </tr></thead>
+          <tbody class="num">${rows}</tbody>
+        </table>
+      </div></div>`;
   };
 
   const updateTotals = () => {
@@ -1613,6 +1714,7 @@ function renderDish(id, existingDraft) {
     });
     const c = dishCost(draft.rows.filter((r) => r.id || r.grams !== ""));
     document.getElementById("dishTotal").textContent = money(c.total);
+    renderProteinPanel(c.total);
     const sell = Number(document.getElementById("dishSell").value);
     const gpAbs = document.getElementById("gpAbs");
     const gpPct = document.getElementById("gpPct");
@@ -1658,6 +1760,8 @@ function renderDish(id, existingDraft) {
     renderDish(id, { ...draft });
   };
   document.getElementById("dishSell").oninput = updateTotals;
+  const protBox = document.getElementById("dishProt");
+  if (protBox) protBox.onchange = () => { captureDraft(); renderDish(id, { ...draft }); };
 
   document.getElementById("btnSave").onclick = async () => {
     captureDraft();
@@ -1682,6 +1786,7 @@ function renderDish(id, existingDraft) {
       };
       if (hasDishCat()) fields.category = draft.category;
       if (hasNameTh()) fields.name_th = draft.name_th.trim() || null;
+      if (state.proteins.length) fields.uses_protein = !!draft.uses_protein;
       if (isNew) {
         const { data, error } = await db.from("dishes").insert(fields).select().single();
         if (error) throw error;
