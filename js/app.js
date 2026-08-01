@@ -242,7 +242,11 @@ async function refreshData() {
   const jobs = [
     db.from("ingredients").select("*, purchases(*)").order("name"),
     db.from("dishes").select("*, dish_ingredients(*)").order("name"),
-    db.from("sauces").select("*, sauce_ingredients(*)").order("name"),
+    // sauce_ingredients links to sauces twice (sauce_id and sub_sauce_id),
+    // so the embed must name which foreign key to follow.
+    db.from("sauces")
+      .select("*, sauce_ingredients!sauce_ingredients_sauce_id_fkey(*)")
+      .order("name"),
     db.from("stock_levels").select("*"),
     db.from("protein_options").select("*").order("sort_order"),
     db.from("ingredient_aliases").select("*"),
@@ -258,10 +262,15 @@ async function refreshData() {
 
   // Sauces arrive with a later migration — degrade gracefully without it.
   if (sauces.error) {
+    console.error("sauces query failed:", sauces.error);
     state.sauces = [];
     state.saucesMissing = true;
   } else {
-    state.sauces = sauces.data;
+    state.sauces = sauces.data.map((x) => ({
+      ...x,
+      sauce_ingredients: x.sauce_ingredients
+        || x["sauce_ingredients!sauce_ingredients_sauce_id_fkey"] || [],
+    }));
     state.saucesMissing = false;
   }
 
