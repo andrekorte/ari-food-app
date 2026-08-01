@@ -163,7 +163,6 @@ insert into public.sauces (name, name_th, updated_by) values
   ('Lime juice mix', 'น้ำมะนาวผสม', 'SOP import'),
   ('Ajard (cucumber relish liquid)', 'น้ำอาจาด', 'SOP import'),
   ('Meat marinade (per 1 kg meat)', 'หมักเนื้อสัตว์', 'SOP import'),
-  ('Chestnut sauce', 'ซอสแห้ว', 'SOP import'),
   ('Yum dressing', 'น้ำยำ', 'SOP import');
 
 -- 4. Sauce recipes (ingredients and nested sauces) -----------------
@@ -361,7 +360,6 @@ insert into public.sauce_ingredients (sauce_id, ingredient_id, sub_sauce_id, gra
   ((select id from public.sauces where name = 'Meat marinade (per 1 kg meat)'), (select id from public.ingredients where name = 'Water'), null::uuid, 150),
   ((select id from public.sauces where name = 'Meat marinade (per 1 kg meat)'), (select id from public.ingredients where name = 'Vegetable oil'), null::uuid, 60),
   ((select id from public.sauces where name = 'Meat marinade (per 1 kg meat)'), (select id from public.ingredients where name = 'Tapioca flour'), null::uuid, 15);
--- Chestnut sauce: recipe not in the SOP yet
 -- Yum dressing: recipe not in the SOP yet
 
 -- 5. Dishes: new hot bar entries ----------------------------------
@@ -745,7 +743,6 @@ select * from (values
   ((select id from public.dishes where name = 'Chicken Chestnuts'), (select id from public.ingredients where name = 'Baby corn'), null::uuid, 21.43),
   ((select id from public.dishes where name = 'Chicken Chestnuts'), (select id from public.ingredients where name = 'Chicken breast fillet sliced'), null::uuid, 50.0),
   ((select id from public.dishes where name = 'Chicken Chestnuts'), null::uuid, (select id from public.sauces where name = 'Stir-fry sauce'), 17.86),
-  ((select id from public.dishes where name = 'Chicken Chestnuts'), null::uuid, (select id from public.sauces where name = 'Chestnut sauce'), 14.29),
   ((select id from public.dishes where name = 'Chicken Chestnuts'), (select id from public.ingredients where name = 'Spring onion'), null::uuid, 8.93),
   ((select id from public.dishes where name = 'Chicken Chestnuts'), (select id from public.ingredients where name = 'Water chestnuts'), null::uuid, 8.93)
 ) as v(dish_id, ingredient_id, sauce_id, grams) where v.dish_id is not null;
@@ -761,7 +758,6 @@ select * from (values
   ((select id from public.dishes where name = 'Chicken Chestnuts with Rice'), (select id from public.ingredients where name = 'Baby corn'), null::uuid, 21.43),
   ((select id from public.dishes where name = 'Chicken Chestnuts with Rice'), (select id from public.ingredients where name = 'Chicken breast fillet sliced'), null::uuid, 50.0),
   ((select id from public.dishes where name = 'Chicken Chestnuts with Rice'), null::uuid, (select id from public.sauces where name = 'Stir-fry sauce'), 17.86),
-  ((select id from public.dishes where name = 'Chicken Chestnuts with Rice'), null::uuid, (select id from public.sauces where name = 'Chestnut sauce'), 14.29),
   ((select id from public.dishes where name = 'Chicken Chestnuts with Rice'), (select id from public.ingredients where name = 'Spring onion'), null::uuid, 8.93),
   ((select id from public.dishes where name = 'Chicken Chestnuts with Rice'), (select id from public.ingredients where name = 'Water chestnuts'), null::uuid, 8.93),
   ((select id from public.dishes where name = 'Chicken Chestnuts with Rice'), (select id from public.ingredients where name = 'Jasmine rice (raw)'), null::uuid, 170)

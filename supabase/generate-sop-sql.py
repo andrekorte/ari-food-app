@@ -200,7 +200,6 @@ SAUCE = {
     ("i","white_sugar",2000), ("i","vinegar",1000), ("i","salt",20)]),
  "meat_marinade": ("Meat marinade (per 1 kg meat)", "หมักเนื้อสัตว์", [
     ("i","bicarb",6), ("i","water",150), ("i","veg_oil",60), ("i","tapioca_flour",15)]),
- "chestnut_sauce": ("Chestnut sauce", "ซอสแห้ว", []),
  "yum_dressing": ("Yum dressing", "น้ำยำ", []),
 }
 
@@ -296,7 +295,7 @@ HOTBAR = [
   ("Chicken Chestnuts", "ไก่ผัดแห้ว", 14, [
     ("i","veg_oil",200), ("i","brown_onion",300), ("i","carrot",300), ("i","capsicum",300),
     ("i","zucchini",300), ("i","broccoli",300), ("i","baby_corn",300), ("i","chicken_slice",700),
-    ("s","stirfry_sauce",250), ("s","chestnut_sauce",200), ("i","spring_onion",125),
+    ("s","stirfry_sauce",250), ("i","spring_onion",125),
     ("i","water_chestnut",125)]),
   ("Green Curry Chicken", "แกงเขียวหวานไก่", 27, [
     ("s","green_curry_sauce",3375), ("i","eggplant",1500), ("i","chicken_curry",1000),
