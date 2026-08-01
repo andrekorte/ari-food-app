@@ -10,35 +10,25 @@ Supabase → **SQL Editor** → **New query** → paste the whole of
 This makes sure everyone who signs up gets the access level they were
 invited with, and that your existing accounts keep full admin access.
 
-## 2. Add the service role key as a secret
+## 2. Deploy the function
 
-The Users tab can only work through an Edge Function, because listing
-accounts, sending invites and deleting logins need Supabase's **service
-role** key — a key that can do anything in your database. It must never be
-put in the app itself: anyone could read it out of the page and take over
-the database. Keeping it in a function means it stays on Supabase's servers.
-
-1. Supabase → **Project Settings** → **API Keys**.
-2. Find **service_role** and copy it. (It's hidden behind a *Reveal* button.
-   Treat it like a password — don't paste it into email or chat.)
-3. Go to **Edge Functions** → **Secrets** → **Add new secret**.
-   - Name: `SUPABASE_SERVICE_ROLE_KEY`
-   - Value: the key you copied
-4. **Save**.
-
-## 3. Deploy the function
-
-If you have the Supabase CLI installed:
-
-```
-supabase functions deploy manage-users
-```
-
-Otherwise, in the dashboard: **Edge Functions** → **Create a function** →
-name it exactly `manage-users` → paste the contents of
+Supabase → **Edge Functions** → **Create a function** → name it exactly
+`manage-users` → paste the contents of
 `supabase/functions/manage-users/index.ts` → **Deploy**.
 
-## 4. Check the invite emails point at the app
+Or with the CLI: `supabase functions deploy manage-users`
+
+There is normally no key to configure: Supabase gives every Edge Function
+the service role key automatically. It is never sent to the browser, which
+is the whole reason account management lives in a function rather than in
+the app.
+
+If opening the Users tab reports that no service key is available, the
+project has the legacy keys switched off. In that case go to **Settings →
+API Keys**, copy the `sb_secret_…` key under **Secret keys**, and add it
+under **Edge Functions → Secrets** with the name `SERVICE_KEY`.
+
+## 3. Check the invite emails point at the app
 
 Supabase → **Authentication** → **URL Configuration** → set **Site URL** to:
 

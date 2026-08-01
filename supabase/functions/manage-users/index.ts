@@ -6,10 +6,10 @@
 // as an Edge Function secret, and every request is checked twice: the caller
 // must be signed in, and their profile role must be 'admin'.
 //
-// Secrets required (Supabase → Edge Functions → Secrets):
-//   SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
-// The first two are provided automatically; only the service role key needs
-// to be added by hand.
+// Supabase gives every Edge Function SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
+// automatically, so normally there is nothing to configure. If a project has
+// the legacy keys turned off, add the sb_secret_… key from
+// Settings → API Keys as a secret named SERVICE_KEY and this picks it up.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -26,29 +26,32 @@ const json = (body: unknown, status = 200) =>
   });
 
 const URL_ = Deno.env.get("SUPABASE_URL")!;
-const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
-const SERVICE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SERVICE =
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||   // provided automatically
+  Deno.env.get("SERVICE_KEY") ||                 // sb_secret_… added by hand
+  "";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
 
   if (!SERVICE) {
-    return json({ error: "SUPABASE_SERVICE_ROLE_KEY is not set on this function." }, 500);
+    return json({
+      error: "No service key available. Add the sb_secret_… key from " +
+             "Settings → API Keys as an Edge Function secret named SERVICE_KEY.",
+    }, 500);
   }
 
   const auth = req.headers.get("Authorization") || "";
   if (!auth.startsWith("Bearer ")) return json({ error: "Not signed in." }, 401);
 
-  // Who is asking?
-  const caller = createClient(URL_, ANON, {
-    global: { headers: { Authorization: auth } },
-  });
-  const { data: me, error: meErr } = await caller.auth.getUser();
-  if (meErr || !me?.user) return json({ error: "Not signed in." }, 401);
-
   const admin = createClient(URL_, SERVICE, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+
+  // Who is asking? Checking the caller's token against the same client
+  // avoids needing a second key just to read the session.
+  const { data: me, error: meErr } = await admin.auth.getUser(auth.slice(7));
+  if (meErr || !me?.user) return json({ error: "Not signed in." }, 401);
 
   // Are they allowed? A missing profile row is treated as admin only for
   // the very first account, matching public.is_admin() in the database.
